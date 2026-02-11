@@ -32,7 +32,7 @@ def test_single_seed_strict_mode_raises_value_error_for_non_divisible_shape() ->
         )
 
 
-def test_single_seed_padded_mode_runs_and_warns() -> None:
+def test_single_seed_padded_mode_runs_warns_and_returns_padding_metadata() -> None:
     movie, grid = _make_inputs()
 
     with pytest.warns(UserWarning, match="edge padding can affect"):
@@ -51,6 +51,9 @@ def test_single_seed_padded_mode_runs_and_warns() -> None:
 
     assert result.by == 25
     assert result.bx == 40
+    assert result.padded is True
+    assert result.original_shape == (396, 640)
+    assert result.padded_shape == (400, 640)
 
 
 def test_velocity_map_strict_mode_raises_value_error_for_non_divisible_shape() -> None:
@@ -71,7 +74,7 @@ def test_velocity_map_strict_mode_raises_value_error_for_non_divisible_shape() -
         )
 
 
-def test_velocity_map_padded_mode_runs_and_warns() -> None:
+def test_velocity_map_padded_mode_runs_warns_and_returns_padding_metadata() -> None:
     movie, grid = _make_inputs()
 
     with pytest.warns(UserWarning, match="edge padding can affect"):
@@ -90,3 +93,28 @@ def test_velocity_map_padded_mode_runs_and_warns() -> None:
 
     assert result.ux_map.shape == (25, 40)
     assert result.uy_map.shape == (25, 40)
+    assert result.padded is True
+    assert result.original_shape == (396, 640)
+    assert result.padded_shape == (400, 640)
+
+
+def test_options_allow_bin_padding_still_enables_padding_with_deprecation_warning() -> None:
+    movie, grid = _make_inputs()
+
+    with pytest.warns(DeprecationWarning, match="EstimationOptions.allow_bin_padding"):
+        with pytest.warns(UserWarning, match="edge padding can affect"):
+            result = estimate_velocity_map(
+                movie=movie,
+                fs=1000.0,
+                grid=grid,
+                bg_boxes_px=[(32, 80, 32, 80)],
+                extent_xd_yd=(0.0, 1.0, 0.0, 1.0),
+                dj_mm=1.0,
+                shifts=(1,),
+                options=EstimationOptions(min_used=1, allow_bin_padding=True),
+                allow_bin_padding=False,
+                use_shear_mask=False,
+            )
+
+    assert result.padded is True
+    assert result.padded_shape == (400, 640)

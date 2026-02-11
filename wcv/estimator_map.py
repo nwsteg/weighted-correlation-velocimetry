@@ -36,6 +36,14 @@ def estimate_velocity_map(
     origin: str = "upper",
     detrend_type: str = "linear",
 ) -> VelocityMapResult:
+    """Estimate a velocity map over all seed bins on the analysis grid.
+
+    Padding behavior is controlled by the estimator argument
+    ``allow_bin_padding`` (preferred) and, for backward compatibility,
+    ``options.allow_bin_padding``. If either is ``True``, non-divisible input
+    dimensions are edge-padded to the nearest ``grid.bin_px`` multiple and a
+    ``UserWarning`` is emitted once per call.
+    """
     f = np.asarray(movie, dtype=np.float32)
     _, ny, nx = f.shape
     original_shape = (ny, nx)
@@ -48,8 +56,8 @@ def estimate_velocity_map(
         padded = True
         warnings.warn(
             f"Input movie shape ({ny},{nx}) was padded to ({ny_pad},{nx_pad}) to satisfy "
-            "bin_px divisibility; edge padding can affect correlation/velocity estimates near "
-            "image borders.",
+            f"bin_px divisibility using mode={options.padding_mode!r}; edge padding can affect "
+            "correlation/velocity estimates near image borders.",
             UserWarning,
             stacklevel=2,
         )
