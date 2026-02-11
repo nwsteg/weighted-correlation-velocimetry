@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "weighted-correlation-velocimetry"
+version = "0.1.0"
+description = "Patch-based weighted-correlation velocimetry with superbinning"
+requires-python = ">=3.10"
+dependencies = ["numpy", "scipy", "matplotlib"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["wcv*"]
