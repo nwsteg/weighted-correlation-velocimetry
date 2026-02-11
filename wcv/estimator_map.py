@@ -49,20 +49,11 @@ def estimate_velocity_map(
     original_shape = (ny, nx)
     padded = False
     bin_px = grid.bin_px
-
     use_padding = bool(allow_bin_padding or options.allow_bin_padding)
-    if options.allow_bin_padding:
-        warnings.warn(
-            "EstimationOptions.allow_bin_padding is deprecated and will be removed in a "
-            "future release; use estimator argument allow_bin_padding instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
     if use_padding and (ny % bin_px or nx % bin_px):
         ny_pad, nx_pad, pad_y, pad_x = compute_bin_aligned_padding(ny, nx, bin_px)
-        padded = True
         f = np.pad(f, ((0, 0), (0, pad_y), (0, pad_x)), mode=options.padding_mode)
+        padded = True
         warnings.warn(
             f"Input movie shape ({ny},{nx}) was padded to ({ny_pad},{nx_pad}) to satisfy "
             f"bin_px divisibility using mode={options.padding_mode!r}; edge padding can affect "
