@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 from .correlation import corr_matrix_positive_shift
@@ -27,6 +29,7 @@ def estimate_velocity_map(
     dj_mm: float,
     shifts: tuple[int, ...] = (1,),
     options: EstimationOptions = EstimationOptions(),
+    allow_bin_padding: bool = False,
     use_shear_mask: bool = True,
     shear_mask_px: np.ndarray | None = None,
     shear_pctl: float = 50,
@@ -34,23 +37,22 @@ def estimate_velocity_map(
     detrend_type: str = "linear",
 ) -> VelocityMapResult:
     f = np.asarray(movie, dtype=np.float32)
-    nt, ny, nx = f.shape
-    original_shape = (ny, nx)
-    padded = False
+    _, ny, nx = f.shape
+    bin_px = grid.bin_px
+    if allow_bin_padding and (ny % bin_px or nx % bin_px):
+        ny_pad = ((ny + bin_px - 1) // bin_px) * bin_px
+        nx_pad = ((nx + bin_px - 1) // bin_px) * bin_px
+        f = np.pad(f, ((0, 0), (0, ny_pad - ny), (0, nx_pad - nx)), mode="edge")
+        warnings.warn(
+            f"Input movie shape ({ny},{nx}) was padded to ({ny_pad},{nx_pad}) to satisfy "
+            "bin_px divisibility; edge padding can affect correlation/velocity estimates near "
+            "image borders.",
+            UserWarning,
+            stacklevel=2,
+        )
 
-    try:
-        bin_px, by, bx = validate_grid(ny, nx, grid.patch_px, grid.grid_stride_patches)
-    except ValueError:
-        if not options.allow_bin_padding:
-            raise
-        bin_px_target = int(grid.patch_px) * int(grid.grid_stride_patches)
-        ny_pad, nx_pad, pad_y, pad_x = compute_bin_aligned_padding(ny, nx, bin_px_target)
-        if pad_y == 0 and pad_x == 0:
-            raise
-        f = np.pad(f, ((0, 0), (0, pad_y), (0, pad_x)), mode=options.padding_mode)
-        ny, nx = ny_pad, nx_pad
-        padded = True
-        bin_px, by, bx = validate_grid(ny, nx, grid.patch_px, grid.grid_stride_patches)
+    _, ny, nx = f.shape
+    bin_px, by, bx = validate_grid(ny, nx, grid.patch_px, grid.grid_stride_patches)
 
     region_raw, _, _ = block_mean_timeseries(f, bin_px=bin_px)
     region_dt = detrend_series(region_raw, axis=1, detrend_type=detrend_type)
