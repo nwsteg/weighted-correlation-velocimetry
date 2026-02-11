@@ -57,7 +57,7 @@ single = estimate_single_seed_velocity(
     dj_mm=dj_mm,
     shifts=(1, 2, 3),
     options=opts,
-    allow_bin_padding=True,  # warns once per call only when edge-padding is applied
+    allow_bin_padding=True,  # preferred API for padding; warns once only if padding is applied
 )
 print(f"single-seed Ux={single.ux:.3f} m/s, Uy={single.uy:.3f} m/s")
 
@@ -71,7 +71,7 @@ vm = estimate_velocity_map(
     dj_mm=dj_mm,
     shifts=(1, 2, 3),
     options=opts,
-    allow_bin_padding=True,  # warns once per call only when edge-padding is applied
+    allow_bin_padding=True,  # preferred API for padding; warns once only if padding is applied
 )
 print(f"valid seeds: {vm.valid_seed_count}/{vm.total_seed_count}")
 

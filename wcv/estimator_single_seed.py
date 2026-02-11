@@ -29,12 +29,46 @@ def estimate_single_seed_velocity(
     origin: str = "upper",
     detrend_type: str = "linear",
 ) -> SingleSeedResult:
+    """Estimate velocity from one seed region to all analysis bins.
+
+    Padding behavior is controlled by the estimator argument
+    ``allow_bin_padding`` (preferred) and, for backward compatibility,
+    ``options.allow_bin_padding``. If either is ``True``, non-divisible input
+    dimensions are edge-padded to the nearest ``grid.bin_px`` multiple and a
+    ``UserWarning`` is emitted once per call.
+
+    Args:
+        movie: Array of shape ``(nt, ny, nx)``.
+        fs: Sampling frequency in Hz.
+        grid: Grid specification containing ``patch_px`` and stride.
+        seed_box_px: Seed box ``(y0, y1, x0, x1)`` in pixels; must be exactly
+            one ``bin_px`` cell.
+        bg_boxes_px: Background-regressor boxes in pixel coordinates.
+        extent_xd_yd: Physical plotting extent ``(xmin, xmax, ymin, ymax)``.
+        dj_mm: Jet diameter in mm.
+        shifts: Integer frame shifts used for correlation and fit.
+        options: Estimation controls (thresholds, weighting, padding mode).
+        allow_bin_padding: Preferred API flag to enable automatic bin-aligned
+            padding when movie dimensions are not divisible by ``grid.bin_px``.
+        origin: Coordinate origin convention ("upper" or "lower").
+        detrend_type: Detrending mode.
+    """
     f = np.asarray(movie, dtype=np.float32)
     _, ny, nx = f.shape
     original_shape = (ny, nx)
     padded = False
     bin_px = grid.bin_px
-    if allow_bin_padding and (ny % bin_px or nx % bin_px):
+
+    use_padding = bool(allow_bin_padding or options.allow_bin_padding)
+    if options.allow_bin_padding:
+        warnings.warn(
+            "EstimationOptions.allow_bin_padding is deprecated and will be removed in a "
+            "future release; use estimator argument allow_bin_padding instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+    if use_padding and (ny % bin_px or nx % bin_px):
         ny_pad, nx_pad, pad_y, pad_x = compute_bin_aligned_padding(ny, nx, bin_px)
         padded = True
         f = np.pad(f, ((0, 0), (0, pad_y), (0, pad_x)), mode=options.padding_mode)
