@@ -24,6 +24,7 @@ def estimate_velocity_per_shift_framework(
     origin="upper",
     detrend_type="linear",
     grid_stride_patches=1,
+    allow_bin_padding=False,
     make_plots=True,
     frame_vis=None,
     **_,
@@ -51,6 +52,7 @@ def estimate_velocity_per_shift_framework(
         dj_mm=Dj_mm,
         shifts=tuple(shifts),
         options=opts,
+        allow_bin_padding=bool(allow_bin_padding),
         origin=origin,
         detrend_type=detrend_type,
     )

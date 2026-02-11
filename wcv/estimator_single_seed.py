@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 from .correlation import shifted_corr_regions
@@ -23,11 +25,26 @@ def estimate_single_seed_velocity(
     dj_mm: float,
     shifts: tuple[int, ...] = (1, 2, 3),
     options: EstimationOptions = EstimationOptions(),
+    allow_bin_padding: bool = False,
     origin: str = "upper",
     detrend_type: str = "linear",
 ) -> SingleSeedResult:
     f = np.asarray(movie, dtype=np.float32)
-    nt, ny, nx = f.shape
+    _, ny, nx = f.shape
+    bin_px = grid.bin_px
+    if allow_bin_padding and (ny % bin_px or nx % bin_px):
+        ny_pad = ((ny + bin_px - 1) // bin_px) * bin_px
+        nx_pad = ((nx + bin_px - 1) // bin_px) * bin_px
+        f = np.pad(f, ((0, 0), (0, ny_pad - ny), (0, nx_pad - nx)), mode="edge")
+        warnings.warn(
+            f"Input movie shape ({ny},{nx}) was padded to ({ny_pad},{nx_pad}) to satisfy "
+            "bin_px divisibility; edge padding can affect correlation/velocity estimates near "
+            "image borders.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    _, ny, nx = f.shape
     bin_px, by, bx = validate_grid(ny, nx, grid.patch_px, grid.grid_stride_patches)
 
     sy0, sy1, sx0, sx1 = map(int, seed_box_px)

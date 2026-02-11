@@ -27,6 +27,8 @@ The package distinguishes two spatial scales:
 
 This preserves the original image extents and avoids manual recropping/relabeling while allowing larger analysis bins.
 
+If your movie dimensions are not divisible by `BIN_PX`, estimators default to strict mode and raise a `ValueError`. You can opt into edge padding with `allow_bin_padding=True`; when padding is applied, the estimator emits a `UserWarning` once per call including original/padded shapes and noting that edge padding can affect correlation/velocity estimates near image borders.
+
 ## Option A: modern API (recommended)
 
 ```python
@@ -55,6 +57,7 @@ res = estimate_single_seed_velocity(
     dj_mm=Dj,
     shifts=(1,),
     options=opts,
+    allow_bin_padding=True,  # warn once if edge-padding is applied
 )
 print(res.ux, res.uy)
 ```
@@ -107,6 +110,7 @@ Ux, Uy, diag = estimate_velocity_per_shift_framework(
     RMIN=0.3,
     MIN_USED=10,
     REQUIRE_DOWNSTREAM=True,
+    allow_bin_padding=True,  # warn once if edge-padding is applied
     make_plots=True,
     frame_vis=frame_vis,
 )
