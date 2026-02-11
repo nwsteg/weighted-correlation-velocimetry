@@ -85,38 +85,77 @@ def estimate_velocity_per_shift_framework(
         plot_seed_and_background_boxes(frame_vis, extent_xD_yD, seed_box_px, bg_boxes_px, origin=origin)
 
         # 2) Per-shift correlation maps with accepted-mask overlay
-        plot_single_seed_correlation_maps(result, frame_vis, extent_xD_yD)
+        plot_single_seed_correlation_maps(result, frame_vis, extent_xD_yD, vmin=-0.25, vmax=0.25)
 
-        # 3) Centroid displacement vs lag (through-origin fit)
+        # 3) Per-shift scatter cloud of accepted bins: dx vs tau (sizes ~ |r|^2)
+        def _sizes_from_weights(w, smin=14.0, smax=120.0):
+            w = np.asarray(w, dtype=float)
+            if w.size == 0:
+                return w
+            scale = np.nanpercentile(w, 95) + 1e-12
+            w0 = np.clip(w / scale, 0.0, 1.0)
+            return smin + (smax - smin) * w0
+
         shifts_fit = [s for s in result.shifts if s != 0]
-        taus, dxs, dys = [], [], []
+
+        fig, ax = plt.subplots(figsize=(7.0, 4.2), constrained_layout=True)
+        taus_used = []
         for s in shifts_fit:
-            dx = result.dx_bar_by_shift.get(s, np.nan)
-            dy = result.dy_bar_by_shift.get(s, np.nan)
-            if np.isfinite(dx) and np.isfinite(dy):
-                taus.append(float(s) / float(fs))
-                dxs.append(float(dx))
-                dys.append(float(dy))
+            m = np.asarray(result.mask_by_shift.get(s, np.zeros_like(result.dx_m, dtype=bool)), dtype=bool)
+            if not np.any(m):
+                continue
+            tau = float(s) / float(fs)
+            r = np.asarray(result.corr_by_shift[s], dtype=float)
+            w = np.abs(r[m]) ** 2
+            sizes = _sizes_from_weights(w)
+            ax.scatter(np.full(np.sum(m), tau), result.dx_m[m], s=sizes, alpha=0.35, label=f"shift={s}")
 
-        if taus:
-            taus = np.asarray(taus, dtype=float)
-            dxs = np.asarray(dxs, dtype=float)
-            dys = np.asarray(dys, dtype=float)
+            dxc = result.dx_bar_by_shift.get(s, np.nan)
+            if np.isfinite(dxc):
+                ax.scatter([tau], [dxc], s=170, marker="X")
+                taus_used.append(tau)
 
-            fig, axes = plt.subplots(1, 2, figsize=(9.0, 3.6), constrained_layout=True)
+        if np.isfinite(result.ux) and len(taus_used):
+            tline = np.linspace(0.0, max(taus_used) * 1.1, 200)
+            ax.plot(tline, float(result.ux) * tline, "k-", lw=2, label=f"fit: Ux={result.ux:.2f} m/s")
 
-            axes[0].scatter(taus, dxs, s=50)
-            tline = np.linspace(0.0, float(taus.max()) * 1.1, 100)
-            axes[0].plot(tline, float(result.ux) * tline, "k-", lw=2)
-            axes[0].set_xlabel("tau (s)")
-            axes[0].set_ylabel("dx_bar (m)")
-            axes[0].set_title(f"dx vs tau (Ux={result.ux:.3g} m/s)")
+        ax.axhline(0, lw=1)
+        ax.axvline(0, lw=1)
+        ax.set_xlabel("tau (s) = shift / fs")
+        ax.set_ylabel("dx (m)")
+        ax.set_title("Per-shift scatter of accepted bins: dx vs tau (sizes ~ |r|^2); X = centroid")
+        if ax.has_data():
+            ax.legend(fontsize=9)
 
-            axes[1].scatter(taus, dys, s=50)
-            axes[1].plot(tline, float(result.uy) * tline, "k-", lw=2)
-            axes[1].set_xlabel("tau (s)")
-            axes[1].set_ylabel("dy_bar (m)")
-            axes[1].set_title(f"dy vs tau (Uy={result.uy:.3g} m/s)")
+        # 4) dx vs dy scatter cloud of accepted bins (per shift)
+        fig, ax = plt.subplots(figsize=(6.5, 4.2), constrained_layout=True)
+        for s in shifts_fit:
+            m = np.asarray(result.mask_by_shift.get(s, np.zeros_like(result.dx_m, dtype=bool)), dtype=bool)
+            if not np.any(m):
+                continue
+            r = np.asarray(result.corr_by_shift[s], dtype=float)
+            w = np.abs(r[m]) ** 2
+            sizes = _sizes_from_weights(w)
+            ax.scatter(result.dx_m[m], result.dy_m[m], s=sizes, alpha=0.35, label=f"shift={s}")
+
+            dxc = result.dx_bar_by_shift.get(s, np.nan)
+            dyc = result.dy_bar_by_shift.get(s, np.nan)
+            if np.isfinite(dxc) and np.isfinite(dyc):
+                ax.scatter([dxc], [dyc], s=180, marker="X")
+
+        if np.isfinite(result.ux) and np.isfinite(result.uy) and abs(float(result.ux)) > 1e-12:
+            slope = float(result.uy) / float(result.ux)
+            x_min, x_max = np.nanmin(result.dx_m), np.nanmax(result.dx_m)
+            xline = np.linspace(float(x_min), float(x_max), 200)
+            ax.plot(xline, slope * xline, "k-", lw=2, label=f"direction: Uy/Ux={slope:.3f}")
+
+        ax.axhline(0, lw=1)
+        ax.axvline(0, lw=1)
+        ax.set_xlabel("dx (m)")
+        ax.set_ylabel("dy (m)")
+        ax.set_title("Accepted-bin scatter in dx-dy (sizes ~ |r|^2); X = centroid")
+        if ax.has_data():
+            ax.legend(fontsize=9)
 
         plt.show()
 

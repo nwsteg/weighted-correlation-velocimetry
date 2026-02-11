@@ -3,7 +3,6 @@ from __future__ import annotations
 import matplotlib.patches as patches
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.colors import CenteredNorm
 
 from .geometry import box_px_to_extent_xywh
 from .types import SingleSeedResult
@@ -31,6 +30,8 @@ def plot_single_seed_correlation_maps(
     result: SingleSeedResult,
     frame_vis: np.ndarray,
     extent_xd_yd,
+    vmin: float = -0.25,
+    vmax: float = 0.25,
 ):
     figs = []
     for s in result.shifts:
@@ -38,7 +39,7 @@ def plot_single_seed_correlation_maps(
         m = result.mask_by_shift[s].reshape(result.by, result.bx)
         fig, ax = plt.subplots(figsize=(6.2, 3.6), constrained_layout=True)
         ax.imshow(frame_vis, extent=extent_xd_yd, cmap="gray", alpha=0.3)
-        im = ax.imshow(r, extent=extent_xd_yd, cmap="RdBu_r", norm=CenteredNorm(vcenter=0.0), interpolation="nearest")
+        im = ax.imshow(r, extent=extent_xd_yd, cmap="RdBu_r", vmin=vmin, vmax=vmax, interpolation="nearest")
         rgba = np.zeros((result.by, result.bx, 4), dtype=float)
         rgba[..., 1] = 0.85
         rgba[..., 2] = 1.0

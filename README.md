@@ -68,7 +68,7 @@ from wcv import estimate_velocity_per_shift_framework, draw_boxes_debug
 from wcv.geometry import frac_to_px_box
 ```
 
-Your existing calls can stay mostly unchanged (including `PATCH_PX=` in `frac_to_px_box(...)` and `estimate_velocity_per_shift_framework(...)`). With `make_plots=True`, the compatibility wrapper now renders (i) seed/BG overlay, (ii) per-shift correlation maps with used-mask overlay, and (iii) centroid-vs-lag fit panels.
+Your existing calls can stay mostly unchanged (including `PATCH_PX=` in `frac_to_px_box(...)` and `estimate_velocity_per_shift_framework(...)`). With `make_plots=True`, the compatibility wrapper now renders (i) seed/BG overlay, (ii) per-shift correlation maps with used-mask overlay (fixed color limits -0.25 to 0.25), (iii) per-shift accepted-bin scatter dx vs tau (sizes ~ |r|^2) with centroid/fit, and (iv) accepted-bin dx vs dy scatter with centroid markers.
 
 ```python
 nt, ny, nx = bgs_f.shape
