@@ -2,6 +2,25 @@
 
 Refactored Python package for convection-velocity estimation from high-speed PLIF movies using patch-wise, time-lagged correlations and weighted-centroid displacement fitting.
 
+## Documentation
+
+Project documentation is published on GitHub Pages at:
+
+`https://<user>.github.io/weighted-correlation-velocimetry/`
+
+To preview docs locally:
+
+```bash
+pip install -r requirements-docs.txt
+mkdocs serve
+```
+
+To build the static site:
+
+```bash
+mkdocs build --strict
+```
+
 ## Install for JupyterLab
 
 From the repo root (recommended editable install):
