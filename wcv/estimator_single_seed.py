@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from .correlation import shifted_corr_regions
-from .geometry import patch_centers_dxdy_m, validate_grid
+from .geometry import compute_bin_aligned_padding, patch_centers_dxdy_m, validate_grid
 from .preprocess import (
     block_mean_timeseries,
     build_background_regressors,
@@ -28,7 +28,22 @@ def estimate_single_seed_velocity(
 ) -> SingleSeedResult:
     f = np.asarray(movie, dtype=np.float32)
     nt, ny, nx = f.shape
-    bin_px, by, bx = validate_grid(ny, nx, grid.patch_px, grid.grid_stride_patches)
+    original_shape = (ny, nx)
+    padded = False
+
+    try:
+        bin_px, by, bx = validate_grid(ny, nx, grid.patch_px, grid.grid_stride_patches)
+    except ValueError:
+        if not options.allow_bin_padding:
+            raise
+        bin_px_target = int(grid.patch_px) * int(grid.grid_stride_patches)
+        ny_pad, nx_pad, pad_y, pad_x = compute_bin_aligned_padding(ny, nx, bin_px_target)
+        if pad_y == 0 and pad_x == 0:
+            raise
+        f = np.pad(f, ((0, 0), (0, pad_y), (0, pad_x)), mode=options.padding_mode)
+        ny, nx = ny_pad, nx_pad
+        padded = True
+        bin_px, by, bx = validate_grid(ny, nx, grid.patch_px, grid.grid_stride_patches)
 
     sy0, sy1, sx0, sx1 = map(int, seed_box_px)
     if (sy1 - sy0) != bin_px or (sx1 - sx0) != bin_px:
@@ -126,4 +141,7 @@ def estimate_single_seed_velocity(
         dy_m=dy_m,
         by=by,
         bx=bx,
+        padded=padded,
+        original_shape=original_shape,
+        padded_shape=(ny, nx),
     )
