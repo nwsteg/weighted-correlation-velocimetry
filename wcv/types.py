@@ -25,6 +25,12 @@ class GridSpec:
 
 @dataclass(frozen=True)
 class EstimationOptions:
+    """Shared estimator tuning options.
+
+    Note:
+        ``allow_bin_padding`` is deprecated. Prefer passing
+        ``allow_bin_padding`` directly to estimator functions.
+    """
     rmin: float = 0.2
     min_used: int = 10
     require_downstream: bool = True

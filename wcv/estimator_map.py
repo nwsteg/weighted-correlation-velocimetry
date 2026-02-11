@@ -36,12 +36,30 @@ def estimate_velocity_map(
     origin: str = "upper",
     detrend_type: str = "linear",
 ) -> VelocityMapResult:
+    """Estimate a velocity map over all seed bins on the analysis grid.
+
+    Padding behavior is controlled by the estimator argument
+    ``allow_bin_padding`` (preferred) and, for backward compatibility,
+    ``options.allow_bin_padding``. If either is ``True``, non-divisible input
+    dimensions are edge-padded to the nearest ``grid.bin_px`` multiple and a
+    ``UserWarning`` is emitted once per call.
+    """
     f = np.asarray(movie, dtype=np.float32)
     _, ny, nx = f.shape
     original_shape = (ny, nx)
     padded = False
     bin_px = grid.bin_px
-    if allow_bin_padding and (ny % bin_px or nx % bin_px):
+
+    use_padding = bool(allow_bin_padding or options.allow_bin_padding)
+    if options.allow_bin_padding:
+        warnings.warn(
+            "EstimationOptions.allow_bin_padding is deprecated and will be removed in a "
+            "future release; use estimator argument allow_bin_padding instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+    if use_padding and (ny % bin_px or nx % bin_px):
         ny_pad, nx_pad, pad_y, pad_x = compute_bin_aligned_padding(ny, nx, bin_px)
         padded = True
         f = np.pad(f, ((0, 0), (0, pad_y), (0, pad_x)), mode=options.padding_mode)
