@@ -1,6 +1,6 @@
 # weighted-correlation-velocimetry
 
-Refactored Python package for convection-velocity estimation from high-speed PLIF movies using patch-wise, time-lagged correlations and weighted-centroid displacement fitting.
+Python package for convection-velocity estimation from high-speed PLIF movies using patch-wise, time-lagged correlations and weighted-centroid displacement fitting.
 
 ## Documentation
 
