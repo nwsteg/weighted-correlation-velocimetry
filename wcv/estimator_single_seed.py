@@ -31,11 +31,14 @@ def estimate_single_seed_velocity(
 ) -> SingleSeedResult:
     f = np.asarray(movie, dtype=np.float32)
     _, ny, nx = f.shape
+    original_shape = (ny, nx)
+    padded = False
     bin_px = grid.bin_px
-    if allow_bin_padding and (ny % bin_px or nx % bin_px):
-        ny_pad = ((ny + bin_px - 1) // bin_px) * bin_px
-        nx_pad = ((nx + bin_px - 1) // bin_px) * bin_px
-        f = np.pad(f, ((0, 0), (0, ny_pad - ny), (0, nx_pad - nx)), mode="edge")
+    use_padding = bool(allow_bin_padding or options.allow_bin_padding)
+    if use_padding and (ny % bin_px or nx % bin_px):
+        ny_pad, nx_pad, pad_y, pad_x = compute_bin_aligned_padding(ny, nx, bin_px)
+        f = np.pad(f, ((0, 0), (0, pad_y), (0, pad_x)), mode=options.padding_mode)
+        padded = True
         warnings.warn(
             f"Input movie shape ({ny},{nx}) was padded to ({ny_pad},{nx_pad}) to satisfy "
             "bin_px divisibility; edge padding can affect correlation/velocity estimates near "
@@ -45,6 +48,7 @@ def estimate_single_seed_velocity(
         )
 
     _, ny, nx = f.shape
+    padded_shape = (ny, nx)
     bin_px, by, bx = validate_grid(ny, nx, grid.patch_px, grid.grid_stride_patches)
 
     sy0, sy1, sx0, sx1 = map(int, seed_box_px)
@@ -145,5 +149,5 @@ def estimate_single_seed_velocity(
         bx=bx,
         padded=padded,
         original_shape=original_shape,
-        padded_shape=(ny, nx),
+        padded_shape=padded_shape,
     )
