@@ -17,6 +17,15 @@ def validate_grid(ny: int, nx: int, patch_px: int, grid_stride_patches: int) -> 
     return bin_px, ny // bin_px, nx // bin_px
 
 
+def compute_bin_aligned_padding(ny: int, nx: int, bin_px: int) -> tuple[int, int, int, int]:
+    """Return padded (ny, nx) and pad sizes to align with bin_px."""
+    if bin_px <= 0:
+        raise ValueError("bin_px must be a positive integer")
+    ny_pad = ((int(ny) + bin_px - 1) // bin_px) * bin_px
+    nx_pad = ((int(nx) + bin_px - 1) // bin_px) * bin_px
+    return ny_pad, nx_pad, ny_pad - int(ny), nx_pad - int(nx)
+
+
 def box_px_to_extent_xywh(box_px, extent_xd_yd, nx: int, ny: int, origin: str = "upper"):
     xmin, xmax, ymin, ymax = map(float, extent_xd_yd)
     y0, y1, x0, x1 = map(int, box_px)

@@ -5,7 +5,7 @@ import warnings
 import numpy as np
 
 from .correlation import shifted_corr_regions
-from .geometry import patch_centers_dxdy_m, validate_grid
+from .geometry import compute_bin_aligned_padding, patch_centers_dxdy_m, validate_grid
 from .preprocess import (
     block_mean_timeseries,
     build_background_regressors,
@@ -143,4 +143,7 @@ def estimate_single_seed_velocity(
         dy_m=dy_m,
         by=by,
         bx=bx,
+        padded=padded,
+        original_shape=original_shape,
+        padded_shape=(ny, nx),
     )

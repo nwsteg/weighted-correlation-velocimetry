@@ -5,7 +5,12 @@ import warnings
 import numpy as np
 
 from .correlation import corr_matrix_positive_shift
-from .geometry import build_shear_mask_patchvec, patch_centers_xy_m, validate_grid
+from .geometry import (
+    build_shear_mask_patchvec,
+    compute_bin_aligned_padding,
+    patch_centers_xy_m,
+    validate_grid,
+)
 from .preprocess import (
     block_mean_timeseries,
     build_background_regressors,
@@ -131,4 +136,7 @@ def estimate_velocity_map(
         corr_by_shift=corr_by_shift,
         valid_seed_count=valid,
         total_seed_count=int(seeds.size),
+        padded=padded,
+        original_shape=original_shape,
+        padded_shape=(ny, nx),
     )

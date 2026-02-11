@@ -30,6 +30,8 @@ class EstimationOptions:
     require_downstream: bool = True
     require_dy_positive: bool = False
     weight_power: float = 2.0
+    allow_bin_padding: bool = False
+    padding_mode: str = "edge"
 
 
 @dataclass
@@ -47,6 +49,9 @@ class SingleSeedResult:
     dy_m: np.ndarray
     by: int
     bx: int
+    padded: bool = False
+    original_shape: tuple[int, int] | None = None
+    padded_shape: tuple[int, int] | None = None
 
 
 @dataclass
@@ -62,3 +67,6 @@ class VelocityMapResult:
     corr_by_shift: Dict[int, np.ndarray]
     valid_seed_count: int
     total_seed_count: int
+    padded: bool = False
+    original_shape: tuple[int, int] | None = None
+    padded_shape: tuple[int, int] | None = None
