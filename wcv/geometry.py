@@ -73,7 +73,27 @@ def patch_centers_dxdy_m(ny, nx, by, bx, bin_px, extent_xd_yd, seed_box_px, dj_m
     return x_m - xsd * d_to_m, y_m - ysd * d_to_m
 
 
-def px_box_snap_aligned(x_px, y_px, w_px, h_px, nx, ny, grid_px, require_multiple=True):
+def px_box_snap_aligned(
+    x_px,
+    y_px,
+    w_px,
+    h_px,
+    nx,
+    ny,
+    grid_px=None,
+    require_multiple=True,
+    GRID_PX=None,
+    PATCH_PX=None,
+):
+    """Snap a box to a lattice.
+
+    Parameters accept `grid_px` (preferred) plus legacy aliases `GRID_PX` and
+    `PATCH_PX` for notebook compatibility.
+    """
+    if grid_px is None:
+        grid_px = GRID_PX if GRID_PX is not None else PATCH_PX
+    if grid_px is None:
+        raise ValueError("grid_px (or GRID_PX/PATCH_PX alias) is required")
     grid_px = int(grid_px)
     w_px = int(w_px)
     h_px = int(h_px)
@@ -86,10 +106,23 @@ def px_box_snap_aligned(x_px, y_px, w_px, h_px, nx, ny, grid_px, require_multipl
     return y0, y0 + h_px, x0, x0 + w_px
 
 
-def frac_to_px_box(px, py, w_px, h_px, nx, ny, grid_px, require_multiple=True):
+def frac_to_px_box(
+    px,
+    py,
+    w_px,
+    h_px,
+    nx,
+    ny,
+    grid_px=None,
+    require_multiple=True,
+    GRID_PX=None,
+    PATCH_PX=None,
+):
     x = int(np.clip(np.round(float(px) * (nx - 1)), 0, nx - 1))
     y = int(np.clip(np.round(float(py) * (ny - 1)), 0, ny - 1))
-    return px_box_snap_aligned(x, y, w_px, h_px, nx, ny, grid_px, require_multiple=require_multiple)
+    return px_box_snap_aligned(
+        x, y, w_px, h_px, nx, ny, grid_px=grid_px, GRID_PX=GRID_PX, PATCH_PX=PATCH_PX, require_multiple=require_multiple
+    )
 
 
 def mask_px_to_patch_vec(mask_px, by, bx, bin_px, thresh=0.5):

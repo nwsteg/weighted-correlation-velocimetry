@@ -2,15 +2,21 @@
 
 Refactored Python package for convection-velocity estimation from high-speed PLIF movies using patch-wise, time-lagged correlations and weighted-centroid displacement fitting.
 
-## Package layout
+## Install for JupyterLab
 
-- `wcv/preprocess.py`: detrending, z-scoring, common-mode regression, block means.
-- `wcv/geometry.py`: extent conversions, patch/superpatch geometry, mask downsampling, box snapping.
-- `wcv/correlation.py`: shifted correlations and full correlation matrices per positive shift.
-- `wcv/estimator_single_seed.py`: single-seed estimator with per-shift diagnostics.
-- `wcv/estimator_map.py`: velocity-map estimator over all seeds on the analysis grid.
-- `wcv/plotting.py`: reusable plotting helpers.
-- `examples/workflow_example.py`: minimal runnable workflow script.
+From the repo root (recommended editable install):
+
+```bash
+pip install -e .
+```
+
+If your notebook kernel uses a different interpreter, install into that kernel's Python:
+
+```bash
+python -m pip install -e .
+```
+
+Then in Jupyter, restart kernel and import normally.
 
 ## Superbinning convention
 
@@ -21,24 +27,98 @@ The package distinguishes two spatial scales:
 
 This preserves the original image extents and avoids manual recropping/relabeling while allowing larger analysis bins.
 
-## Quick start
+## Option A: modern API (recommended)
 
 ```python
 from wcv import GridSpec, EstimationOptions, estimate_single_seed_velocity
+from wcv.geometry import frac_to_px_box
 
-grid = GridSpec(patch_px=4, grid_stride_patches=4)  # BIN_PX=16
-opts = EstimationOptions(rmin=0.2, min_used=10)
+grid = GridSpec(patch_px=4, grid_stride_patches=1)
+opts = EstimationOptions(rmin=0.3, min_used=10)
 
-result = estimate_single_seed_velocity(
+nt, ny, nx = bgs_f.shape
+bin_px = grid.bin_px
+
+seed_box_px = frac_to_px_box(seed_px, seed_py, bin_px, bin_px, nx, ny, grid_px=bin_px)
+bg_boxes_px = [
+    frac_to_px_box(a["px"], a["py"], 3 * bin_px, 3 * bin_px, nx, ny, grid_px=bin_px)
+    for a in BG_ANCHORS
+]
+
+res = estimate_single_seed_velocity(
     movie=bgs_f,
-    fs=15000,
+    fs=fs,
     grid=grid,
-    seed_box_px=seed_box,
-    bg_boxes_px=bg_boxes,
-    extent_xd_yd=(-1, 7, -2.5, 2.5),
-    dj_mm=10.0,
-    shifts=(1, 2, 3),
+    seed_box_px=seed_box_px,
+    bg_boxes_px=bg_boxes_px,
+    extent_xd_yd=extent,
+    dj_mm=Dj,
+    shifts=(1,),
     options=opts,
 )
-print(result.ux, result.uy)
+print(res.ux, res.uy)
 ```
+
+## Option B: drop-in notebook compatibility API
+
+If you want to keep old notebook-style calls with minimal edits:
+
+```python
+from wcv import estimate_velocity_per_shift_framework, draw_boxes_debug
+from wcv.geometry import frac_to_px_box
+```
+
+Your existing calls can stay mostly unchanged (including `PATCH_PX=` in `frac_to_px_box(...)` and `estimate_velocity_per_shift_framework(...)`).
+
+```python
+nt, ny, nx = bgs_f.shape
+
+seed_box_px = frac_to_px_box(
+    px=seed_px, py=seed_py,
+    w_px=PATCH_PX, h_px=PATCH_PX,
+    nx=nx, ny=ny,
+    PATCH_PX=PATCH_PX,   # legacy alias supported
+)
+
+BG_W_PX = BG_NX_PATCH * PATCH_PX
+BG_H_PX = BG_NY_PATCH * PATCH_PX
+bg_boxes_px = [
+    frac_to_px_box(
+        px=a["px"], py=a["py"],
+        w_px=BG_W_PX, h_px=BG_H_PX,
+        nx=nx, ny=ny,
+        PATCH_PX=PATCH_PX,  # legacy alias supported
+    )
+    for a in BG_ANCHORS
+]
+
+frame_vis = np.median(bgs_f, axis=0)
+draw_boxes_debug(frame_vis, extent, seed_box_px, bg_boxes_px, BG_ANCHORS)
+
+Ux, Uy, diag = estimate_velocity_per_shift_framework(
+    bgs_f=bgs_f,
+    fs=fs,
+    PATCH_PX=PATCH_PX,
+    seed_box_px=seed_box_px,
+    bg_boxes_px=bg_boxes_px,
+    extent_xD_yD=extent,
+    Dj_mm=Dj,
+    shifts=(1,),
+    RMIN=0.3,
+    MIN_USED=10,
+    REQUIRE_DOWNSTREAM=True,
+    make_plots=True,
+    frame_vis=frame_vis,
+)
+```
+
+## Package layout
+
+- `wcv/preprocess.py`: detrending, z-scoring, common-mode regression, block means.
+- `wcv/geometry.py`: extent conversions, patch/superpatch geometry, mask downsampling, box snapping.
+- `wcv/correlation.py`: shifted correlations and full correlation matrices per positive shift.
+- `wcv/estimator_single_seed.py`: single-seed estimator with per-shift diagnostics.
+- `wcv/estimator_map.py`: velocity-map estimator over all seeds on the analysis grid.
+- `wcv/plotting.py`: reusable plotting helpers.
+- `wcv/legacy.py`: compatibility wrappers for old notebook API names/signatures.
+- `examples/workflow_example.py`: minimal runnable workflow script.
