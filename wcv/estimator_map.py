@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 import warnings
 
 import numpy as np
@@ -23,6 +24,88 @@ from .preprocess import (
 from .types import EstimationOptions, GridSpec, VelocityMapResult
 
 
+ProgressCallback = Callable[[int, int, str], None]
+
+
+class _StageProgress:
+    def __init__(self, stage: str, total: int, on_progress: ProgressCallback | None = None):
+        self.stage = stage
+        self.total = int(total)
+        self.done = 0
+        self._on_progress = on_progress
+
+    def advance(self, n: int = 1) -> None:
+        self.done = min(self.total, self.done + int(n))
+        if self._on_progress is not None:
+            self._on_progress(self.done, self.total, self.stage)
+
+    def close(self) -> None:
+        if self._on_progress is not None and self.done < self.total:
+            self._on_progress(self.total, self.total, self.stage)
+
+
+def _resolve_progress_callback(
+    show_progress: bool,
+    progress_factory: Callable[[int, str], object] | None,
+    on_progress: ProgressCallback | None,
+) -> Callable[[str, int], _StageProgress] | None:
+    if not show_progress and progress_factory is None and on_progress is None:
+        return None
+
+    user_cb = on_progress
+    tqdm_factory = None
+    if show_progress and progress_factory is None:
+        try:
+            from tqdm.auto import tqdm as tqdm_factory  # type: ignore
+        except Exception:
+            tqdm_factory = None
+
+    def build_stage(stage: str, total: int) -> _StageProgress:
+        stage_cb = user_cb
+        factory = progress_factory
+        bar = None
+
+        if factory is not None:
+            instance = factory(int(total), stage)
+            if callable(instance):
+                stage_cb = instance
+            elif hasattr(instance, "update"):
+                def _bar_cb(done: int, _total: int, _stage: str) -> None:
+                    update = int(done - getattr(_bar_cb, "_last_done", 0))
+                    if update > 0:
+                        instance.update(update)
+                    setattr(_bar_cb, "_last_done", done)
+
+                setattr(_bar_cb, "_last_done", 0)
+                stage_cb = _bar_cb
+                bar = instance
+
+        elif tqdm_factory is not None:
+            bar = tqdm_factory(total=int(total), desc=stage, leave=False)
+
+            def _tqdm_cb(done: int, _total: int, _stage: str) -> None:
+                update = int(done - getattr(_tqdm_cb, "_last_done", 0))
+                if update > 0:
+                    bar.update(update)
+                setattr(_tqdm_cb, "_last_done", done)
+
+            setattr(_tqdm_cb, "_last_done", 0)
+            stage_cb = _tqdm_cb
+
+        p = _StageProgress(stage=stage, total=int(total), on_progress=stage_cb)
+        _base_close = p.close
+
+        def _close() -> None:
+            _base_close()
+            if bar is not None and hasattr(bar, "close"):
+                bar.close()
+
+        p.close = _close  # type: ignore[method-assign]
+        return p
+
+    return build_stage
+
+
 
 def estimate_velocity_map_streaming(
     movie: np.ndarray,
@@ -40,13 +123,21 @@ def estimate_velocity_map_streaming(
     origin: str = "upper",
     detrend_type: str = "linear",
     store_corr_by_shift: bool = False,
+    show_progress: bool = False,
+    progress_factory: Callable[[int, str], object] | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> VelocityMapResult:
     """Estimate a velocity map by streaming correlations seed-by-seed.
 
     Unlike :func:`estimate_velocity_map`, this function does not materialize
     full ``(target, seed)`` correlation matrices unless ``store_corr_by_shift``
     is enabled for diagnostics.
+
+    Progress hooks are optional and disabled by default to keep overhead low.
     """
+    stage_progress = _resolve_progress_callback(show_progress, progress_factory, on_progress)
+    preprocess = stage_progress("preprocessing", 4) if stage_progress is not None else None
+
     f = np.asarray(movie, dtype=np.float32)
     _, ny, nx = f.shape
     original_shape = (ny, nx)
@@ -71,9 +162,13 @@ def estimate_velocity_map_streaming(
 
     region_raw, _, _ = block_mean_timeseries(f, bin_px=bin_px)
     region_dt = detrend_series(region_raw, axis=1, detrend_type=detrend_type)
+    if preprocess is not None:
+        preprocess.advance()
 
     g = build_background_regressors(f, bg_boxes_px, detrend_type=detrend_type)
     region_res = regress_out_common_mode_2d(region_dt, g)
+    if preprocess is not None:
+        preprocess.advance()
 
     if use_shear_mask:
         shear = build_shear_mask_patchvec(
@@ -81,8 +176,13 @@ def estimate_velocity_map_streaming(
         )
     else:
         shear = np.ones(by * bx, dtype=bool)
+    if preprocess is not None:
+        preprocess.advance()
 
     x_m, y_m = patch_centers_xy_m(ny, nx, by, bx, bin_px, extent_xd_yd, dj_mm, origin=origin)
+    if preprocess is not None:
+        preprocess.advance()
+        preprocess.close()
 
     shifts = tuple(sorted(set(int(s) for s in shifts if int(s) > 0)))
     if not shifts:
@@ -100,6 +200,7 @@ def estimate_velocity_map_streaming(
     )
 
     seeds = np.flatnonzero(shear)
+    seed_progress = stage_progress("seed loop progress", int(seeds.size)) if stage_progress is not None else None
     valid = 0
     for j in seeds:
         dx_all = x_m - x_m[j]
@@ -136,6 +237,8 @@ def estimate_velocity_map_streaming(
 
         used_count[j] = n_any
         if not taus:
+            if seed_progress is not None:
+                seed_progress.advance()
             continue
 
         taus = np.asarray(taus)
@@ -145,6 +248,10 @@ def estimate_velocity_map_streaming(
             uy[j] = float(np.sum(taus * np.asarray(dys)) / denom)
             if np.isfinite(ux[j]) and np.isfinite(uy[j]):
                 valid += 1
+        if seed_progress is not None:
+            seed_progress.advance()
+    if seed_progress is not None:
+        seed_progress.close()
 
     return VelocityMapResult(
         ux_map=ux.reshape(by, bx),
@@ -178,6 +285,9 @@ def estimate_velocity_map(
     shear_pctl: float = 50,
     origin: str = "upper",
     detrend_type: str = "linear",
+    show_progress: bool = False,
+    progress_factory: Callable[[int, str], object] | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> VelocityMapResult:
     """Estimate a velocity map over all seed bins on the analysis grid.
 
@@ -186,7 +296,12 @@ def estimate_velocity_map(
     ``options.allow_bin_padding``. If either is ``True``, non-divisible input
     dimensions are edge-padded to the nearest ``grid.bin_px`` multiple and a
     ``UserWarning`` is emitted once per call.
+
+    Progress hooks are optional and disabled by default to keep overhead low.
     """
+    stage_progress = _resolve_progress_callback(show_progress, progress_factory, on_progress)
+    preprocess = stage_progress("preprocessing", 4) if stage_progress is not None else None
+
     f = np.asarray(movie, dtype=np.float32)
     _, ny, nx = f.shape
     original_shape = (ny, nx)
@@ -211,9 +326,13 @@ def estimate_velocity_map(
 
     region_raw, _, _ = block_mean_timeseries(f, bin_px=bin_px)
     region_dt = detrend_series(region_raw, axis=1, detrend_type=detrend_type)
+    if preprocess is not None:
+        preprocess.advance()
 
     g = build_background_regressors(f, bg_boxes_px, detrend_type=detrend_type)
     region_res = regress_out_common_mode_2d(region_dt, g)
+    if preprocess is not None:
+        preprocess.advance()
 
     if use_shear_mask:
         shear = build_shear_mask_patchvec(
@@ -221,14 +340,26 @@ def estimate_velocity_map(
         )
     else:
         shear = np.ones(by * bx, dtype=bool)
+    if preprocess is not None:
+        preprocess.advance()
 
     x_m, y_m = patch_centers_xy_m(ny, nx, by, bx, bin_px, extent_xd_yd, dj_mm, origin=origin)
+    if preprocess is not None:
+        preprocess.advance()
+        preprocess.close()
 
     shifts = tuple(sorted(set(int(s) for s in shifts if int(s) > 0)))
     if not shifts:
         raise ValueError("shifts must include at least one positive integer")
 
-    corr_by_shift = {s: corr_matrix_positive_shift(region_res, s) for s in shifts}
+    corr_by_shift: dict[int, np.ndarray] = {}
+    shift_progress = stage_progress("per-shift processing", len(shifts)) if stage_progress is not None else None
+    for s in shifts:
+        corr_by_shift[s] = corr_matrix_positive_shift(region_res, s)
+        if shift_progress is not None:
+            shift_progress.advance()
+    if shift_progress is not None:
+        shift_progress.close()
 
     n_regions = by * bx
     ux = np.full(n_regions, np.nan, dtype=np.float32)
@@ -236,6 +367,7 @@ def estimate_velocity_map(
     used_count = np.zeros(n_regions, dtype=np.int32)
 
     seeds = np.flatnonzero(shear)
+    seed_progress = stage_progress("seed loop progress", int(seeds.size)) if stage_progress is not None else None
     valid = 0
     for j in seeds:
         dx_all = x_m - x_m[j]
@@ -269,6 +401,8 @@ def estimate_velocity_map(
 
         used_count[j] = n_any
         if not taus:
+            if seed_progress is not None:
+                seed_progress.advance()
             continue
 
         taus = np.asarray(taus)
@@ -278,6 +412,10 @@ def estimate_velocity_map(
             uy[j] = float(np.sum(taus * np.asarray(dys)) / denom)
             if np.isfinite(ux[j]) and np.isfinite(uy[j]):
                 valid += 1
+        if seed_progress is not None:
+            seed_progress.advance()
+    if seed_progress is not None:
+        seed_progress.close()
 
     return VelocityMapResult(
         ux_map=ux.reshape(by, bx),

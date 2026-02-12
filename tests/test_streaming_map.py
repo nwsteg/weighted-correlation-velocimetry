@@ -80,3 +80,62 @@ def test_velocity_map_streaming_matches_materialized_and_skips_corr_storage_by_d
         atol=1e-6,
         equal_nan=True,
     )
+
+
+def test_velocity_map_progress_callback_reports_all_stages() -> None:
+    rng = np.random.default_rng(13)
+    movie = rng.standard_normal((18, 24, 24), dtype=np.float32)
+    grid = GridSpec(patch_px=8, grid_stride_patches=1)
+
+    events: list[tuple[int, int, str]] = []
+
+    estimate_velocity_map(
+        movie=movie,
+        fs=1000.0,
+        grid=grid,
+        bg_boxes_px=[(0, 8, 0, 8)],
+        extent_xd_yd=(0.0, 1.0, 0.0, 1.0),
+        dj_mm=1.0,
+        shifts=(1, 2, 3),
+        options=EstimationOptions(min_used=1, rmin=0.0),
+        allow_bin_padding=False,
+        use_shear_mask=False,
+        on_progress=lambda done, total, stage: events.append((done, total, stage)),
+    )
+
+    assert any(stage == "preprocessing" and done == total == 4 for done, total, stage in events)
+    assert any(stage == "per-shift processing" and done == total == 3 for done, total, stage in events)
+    assert any(stage == "seed loop progress" and done == total == 9 for done, total, stage in events)
+
+
+def test_streaming_velocity_map_progress_factory_per_stage_callback() -> None:
+    rng = np.random.default_rng(14)
+    movie = rng.standard_normal((18, 24, 24), dtype=np.float32)
+    grid = GridSpec(patch_px=8, grid_stride_patches=1)
+
+    stage_done: dict[str, tuple[int, int]] = {}
+
+    def factory(total: int, stage: str):
+        def callback(done: int, total_arg: int, stage_arg: str) -> None:
+            stage_done[stage_arg] = (done, total_arg)
+
+        assert total > 0
+        assert stage in {"preprocessing", "seed loop progress"}
+        return callback
+
+    estimate_velocity_map_streaming(
+        movie=movie,
+        fs=1000.0,
+        grid=grid,
+        bg_boxes_px=[(0, 8, 0, 8)],
+        extent_xd_yd=(0.0, 1.0, 0.0, 1.0),
+        dj_mm=1.0,
+        shifts=(1, 2, 3),
+        options=EstimationOptions(min_used=1, rmin=0.0),
+        allow_bin_padding=False,
+        use_shear_mask=False,
+        progress_factory=factory,
+    )
+
+    assert stage_done["preprocessing"] == (4, 4)
+    assert stage_done["seed loop progress"] == (9, 9)
