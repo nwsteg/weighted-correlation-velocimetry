@@ -138,3 +138,63 @@ def corr_targets_for_seed_chunk_positive_shift(
     za = a0 / (a0.std(axis=1, ddof=1, keepdims=True) + 1e-12)
     zb = b0 / (b0.std(axis=1, ddof=1, keepdims=True) + 1e-12)
     return ((za @ zb.T) / float(n1 - 1)).astype(np.float32, copy=False)
+
+
+def corr_targets_for_seed_block_positive_shift(
+    region_res: np.ndarray,
+    seed_indices: np.ndarray,
+    shift: int,
+    *,
+    target_row_means: np.ndarray | None = None,
+    target_row_stds: np.ndarray | None = None,
+    seed_row_means: np.ndarray | None = None,
+    seed_row_stds: np.ndarray | None = None,
+    norm_denom: float | None = None,
+) -> np.ndarray:
+    """corr[seed_block, target] for positive shift.
+
+    Returns matrix with shape ``(k, n_regions)`` where ``k = len(seed_indices)``.
+    """
+    s = int(shift)
+    if s <= 0:
+        raise ValueError("shift must be > 0")
+
+    seed_indices = np.asarray(seed_indices, dtype=np.int64)
+    n_regions, nt = region_res.shape
+    if seed_indices.ndim != 1:
+        raise ValueError("seed_indices must be a 1D array")
+    if np.any(seed_indices < 0) or np.any(seed_indices >= n_regions):
+        raise IndexError("seed_indices out of bounds")
+
+    n1 = nt - s
+    if n1 < 3:
+        return np.full((seed_indices.size, n_regions), np.nan, dtype=np.float32)
+
+    a = region_res[:, s:].astype(np.float64, copy=False)
+    b = region_res[seed_indices, :-s].astype(np.float64, copy=False)
+
+    if target_row_means is None:
+        a_means = a.mean(axis=1)
+    else:
+        a_means = np.asarray(target_row_means, dtype=np.float64)
+
+    if target_row_stds is None:
+        a_stds = a.std(axis=1, ddof=1) + 1e-12
+    else:
+        a_stds = np.asarray(target_row_stds, dtype=np.float64)
+
+    if seed_row_means is None:
+        b_means = b.mean(axis=1)
+    else:
+        b_means = np.asarray(seed_row_means, dtype=np.float64)[seed_indices]
+
+    if seed_row_stds is None:
+        b_stds = b.std(axis=1, ddof=1) + 1e-12
+    else:
+        b_stds = np.asarray(seed_row_stds, dtype=np.float64)[seed_indices]
+
+    denom = float(norm_denom) if norm_denom is not None else float(n1 - 1)
+
+    za = (a - a_means[:, None]) / a_stds[:, None]
+    zb = (b - b_means[:, None]) / b_stds[:, None]
+    return ((zb @ za.T) / denom).astype(np.float32, copy=False)
