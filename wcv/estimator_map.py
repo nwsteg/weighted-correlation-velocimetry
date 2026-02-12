@@ -44,6 +44,59 @@ class _StageProgress:
             self._on_progress(self.total, self.total, self.stage)
 
 
+def _fit_seed_from_corr_vectors(
+    *,
+    seed_idx: int,
+    shear: np.ndarray,
+    x_m: np.ndarray,
+    y_m: np.ndarray,
+    shifts: tuple[int, ...],
+    fs: float,
+    options: EstimationOptions,
+    corr_for_shift: Callable[[int], np.ndarray],
+) -> tuple[float, float, int]:
+    dx_all = x_m - x_m[seed_idx]
+    dy_all = y_m - y_m[seed_idx]
+
+    gate = shear.copy()
+    gate[seed_idx] = False
+    if options.require_downstream:
+        gate &= dx_all > 0
+
+    taus, dxs, dys = [], [], []
+    n_any = 0
+    for s in shifts:
+        r = corr_for_shift(int(s))
+        m = gate & np.isfinite(r) & (r > 0) & (r >= options.rmin)
+        if options.require_dy_positive:
+            m &= dy_all > 0
+        n = int(m.sum())
+        if n < options.min_used:
+            continue
+
+        w = (r[m].astype(np.float64) ** options.weight_power)
+        wsum = w.sum()
+        if wsum <= 0 or not np.isfinite(wsum):
+            continue
+
+        taus.append(s / float(fs))
+        dxs.append(float(np.sum(w * dx_all[m]) / wsum))
+        dys.append(float(np.sum(w * dy_all[m]) / wsum))
+        n_any += n
+
+    if not taus:
+        return np.nan, np.nan, n_any
+
+    taus_arr = np.asarray(taus)
+    denom = np.sum(taus_arr * taus_arr)
+    if denom <= 0:
+        return np.nan, np.nan, n_any
+
+    ux_j = float(np.sum(taus_arr * np.asarray(dxs)) / denom)
+    uy_j = float(np.sum(taus_arr * np.asarray(dys)) / denom)
+    return ux_j, uy_j, n_any
+
+
 def _resolve_progress_callback(
     show_progress: bool,
     progress_factory: Callable[[int, str], object] | None,
@@ -203,51 +256,32 @@ def estimate_velocity_map_streaming(
     seed_progress = stage_progress("seed loop progress", int(seeds.size)) if stage_progress is not None else None
     valid = 0
     for j in seeds:
-        dx_all = x_m - x_m[j]
-        dy_all = y_m - y_m[j]
+        corr_cache: dict[int, np.ndarray] = {}
 
-        gate = shear.copy()
-        gate[j] = False
-        if options.require_downstream:
-            gate &= dx_all > 0
+        def _corr_for_shift(s: int) -> np.ndarray:
+            r = corr_cache.get(s)
+            if r is None:
+                r = corr_targets_for_seed_positive_shift(region_res, int(j), int(s))
+                corr_cache[s] = r
+                if store_corr_by_shift:
+                    corr_by_shift[s][:, j] = r
+            return r
 
-        taus, dxs, dys = [], [], []
-        n_any = 0
-        for s in shifts:
-            r = corr_targets_for_seed_positive_shift(region_res, int(j), s)
-            if store_corr_by_shift:
-                corr_by_shift[s][:, j] = r
-
-            m = gate & np.isfinite(r) & (r > 0) & (r >= options.rmin)
-            if options.require_dy_positive:
-                m &= dy_all > 0
-            n = int(m.sum())
-            if n < options.min_used:
-                continue
-
-            w = (r[m].astype(np.float64) ** options.weight_power)
-            wsum = w.sum()
-            if wsum <= 0 or not np.isfinite(wsum):
-                continue
-
-            taus.append(s / float(fs))
-            dxs.append(float(np.sum(w * dx_all[m]) / wsum))
-            dys.append(float(np.sum(w * dy_all[m]) / wsum))
-            n_any += n
-
+        ux_j, uy_j, n_any = _fit_seed_from_corr_vectors(
+            seed_idx=int(j),
+            shear=shear,
+            x_m=x_m,
+            y_m=y_m,
+            shifts=shifts,
+            fs=fs,
+            options=options,
+            corr_for_shift=_corr_for_shift,
+        )
         used_count[j] = n_any
-        if not taus:
-            if seed_progress is not None:
-                seed_progress.advance()
-            continue
-
-        taus = np.asarray(taus)
-        denom = np.sum(taus * taus)
-        if denom > 0:
-            ux[j] = float(np.sum(taus * np.asarray(dxs)) / denom)
-            uy[j] = float(np.sum(taus * np.asarray(dys)) / denom)
-            if np.isfinite(ux[j]) and np.isfinite(uy[j]):
-                valid += 1
+        ux[j] = ux_j
+        uy[j] = uy_j
+        if np.isfinite(ux_j) and np.isfinite(uy_j):
+            valid += 1
         if seed_progress is not None:
             seed_progress.advance()
     if seed_progress is not None:
@@ -370,48 +404,21 @@ def estimate_velocity_map(
     seed_progress = stage_progress("seed loop progress", int(seeds.size)) if stage_progress is not None else None
     valid = 0
     for j in seeds:
-        dx_all = x_m - x_m[j]
-        dy_all = y_m - y_m[j]
-
-        gate = shear.copy()
-        gate[j] = False
-        if options.require_downstream:
-            gate &= dx_all > 0
-
-        taus, dxs, dys = [], [], []
-        n_any = 0
-        for s in shifts:
-            r = corr_by_shift[s][:, j]
-            m = gate & np.isfinite(r) & (r > 0) & (r >= options.rmin)
-            if options.require_dy_positive:
-                m &= dy_all > 0
-            n = int(m.sum())
-            if n < options.min_used:
-                continue
-
-            w = (r[m].astype(np.float64) ** options.weight_power)
-            wsum = w.sum()
-            if wsum <= 0 or not np.isfinite(wsum):
-                continue
-
-            taus.append(s / float(fs))
-            dxs.append(float(np.sum(w * dx_all[m]) / wsum))
-            dys.append(float(np.sum(w * dy_all[m]) / wsum))
-            n_any += n
-
+        ux_j, uy_j, n_any = _fit_seed_from_corr_vectors(
+            seed_idx=int(j),
+            shear=shear,
+            x_m=x_m,
+            y_m=y_m,
+            shifts=shifts,
+            fs=fs,
+            options=options,
+            corr_for_shift=lambda s, _j=int(j): corr_by_shift[s][:, _j],
+        )
         used_count[j] = n_any
-        if not taus:
-            if seed_progress is not None:
-                seed_progress.advance()
-            continue
-
-        taus = np.asarray(taus)
-        denom = np.sum(taus * taus)
-        if denom > 0:
-            ux[j] = float(np.sum(taus * np.asarray(dxs)) / denom)
-            uy[j] = float(np.sum(taus * np.asarray(dys)) / denom)
-            if np.isfinite(ux[j]) and np.isfinite(uy[j]):
-                valid += 1
+        ux[j] = ux_j
+        uy[j] = uy_j
+        if np.isfinite(ux_j) and np.isfinite(uy_j):
+            valid += 1
         if seed_progress is not None:
             seed_progress.advance()
     if seed_progress is not None:
