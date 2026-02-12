@@ -5,6 +5,9 @@ from typing import Dict, Sequence
 
 import numpy as np
 
+SparseCorrRow = tuple[np.ndarray, np.ndarray]
+CorrByShift = Dict[int, np.ndarray | Dict[int, SparseCorrRow]]
+
 
 @dataclass(frozen=True)
 class GridSpec:
@@ -38,6 +41,8 @@ class EstimationOptions:
     weight_power: float = 2.0
     allow_bin_padding: bool = False
     padding_mode: str = "edge"
+    sparse_corr_storage: bool = False
+    sparse_top_k: int | None = None
 
 
 @dataclass
@@ -70,7 +75,7 @@ class VelocityMapResult:
     y_m: np.ndarray
     by: int
     bx: int
-    corr_by_shift: Dict[int, np.ndarray]
+    corr_by_shift: CorrByShift
     valid_seed_count: int
     total_seed_count: int
     padded: bool = False
