@@ -82,6 +82,43 @@ def test_velocity_map_streaming_matches_materialized_and_skips_corr_storage_by_d
     )
 
 
+
+
+def test_velocity_map_streaming_matches_materialized_with_gating_and_weight_options() -> None:
+    rng = np.random.default_rng(21)
+    movie = rng.standard_normal((30, 40, 40), dtype=np.float32)
+    grid = GridSpec(patch_px=8, grid_stride_patches=1)
+    options = EstimationOptions(
+        min_used=2,
+        rmin=0.1,
+        require_downstream=True,
+        require_dy_positive=True,
+        weight_power=1.7,
+    )
+
+    common_kwargs = dict(
+        movie=movie,
+        fs=1200.0,
+        grid=grid,
+        bg_boxes_px=[(0, 8, 0, 8)],
+        extent_xd_yd=(0.0, 1.0, 0.0, 1.0),
+        dj_mm=1.0,
+        shifts=(1, 2, 3),
+        options=options,
+        allow_bin_padding=False,
+        use_shear_mask=False,
+    )
+
+    materialized = estimate_velocity_map(**common_kwargs)
+    streaming = estimate_velocity_map_streaming(**common_kwargs)
+
+    np.testing.assert_allclose(streaming.ux_map, materialized.ux_map, equal_nan=True)
+    np.testing.assert_allclose(streaming.uy_map, materialized.uy_map, equal_nan=True)
+    np.testing.assert_array_equal(streaming.used_count_map, materialized.used_count_map)
+    assert streaming.valid_seed_count == materialized.valid_seed_count
+    assert streaming.total_seed_count == materialized.total_seed_count
+
+
 def test_velocity_map_progress_callback_reports_all_stages() -> None:
     rng = np.random.default_rng(13)
     movie = rng.standard_normal((18, 24, 24), dtype=np.float32)
