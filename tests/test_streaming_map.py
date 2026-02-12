@@ -39,6 +39,35 @@ def test_seedwise_and_chunkwise_positive_shift_correlation_match_full_matrix() -
     )
 
 
+def test_seedwise_positive_shift_correlation_matches_with_precomputed_stats() -> None:
+    rng = np.random.default_rng(31)
+    region_res = rng.standard_normal((9, 22), dtype=np.float32)
+    shift = 2
+
+    target_slice = region_res[:, shift:].astype(np.float64, copy=False)
+    seed_slice = region_res[:, :-shift].astype(np.float64, copy=False)
+    target_row_means = target_slice.mean(axis=1)
+    target_row_stds = target_slice.std(axis=1, ddof=1) + 1e-12
+    seed_row_means = seed_slice.mean(axis=1)
+    seed_row_stds = seed_slice.std(axis=1, ddof=1) + 1e-12
+    norm_denom = float(target_slice.shape[1] - 1)
+
+    seed = 3
+    baseline = corr_targets_for_seed_positive_shift(region_res, seed, shift)
+    precomputed = corr_targets_for_seed_positive_shift(
+        region_res,
+        seed,
+        shift,
+        target_row_means=target_row_means,
+        target_row_stds=target_row_stds,
+        seed_row_means=seed_row_means,
+        seed_row_stds=seed_row_stds,
+        norm_denom=norm_denom,
+    )
+
+    np.testing.assert_allclose(precomputed, baseline, rtol=1e-6, atol=1e-6)
+
+
 def test_velocity_map_streaming_matches_materialized_and_skips_corr_storage_by_default() -> None:
     rng = np.random.default_rng(12)
     movie = rng.standard_normal((24, 32, 32), dtype=np.float32)
@@ -117,6 +146,32 @@ def test_velocity_map_streaming_matches_materialized_with_gating_and_weight_opti
     np.testing.assert_array_equal(streaming.used_count_map, materialized.used_count_map)
     assert streaming.valid_seed_count == materialized.valid_seed_count
     assert streaming.total_seed_count == materialized.total_seed_count
+
+
+def test_velocity_map_streaming_single_shift_single_bin_matches_materialized() -> None:
+    rng = np.random.default_rng(32)
+    movie = rng.standard_normal((20, 24, 24), dtype=np.float32)
+    grid = GridSpec(patch_px=8, grid_stride_patches=1)
+    options = EstimationOptions(min_used=1, rmin=0.0)
+
+    common_kwargs = dict(
+        movie=movie,
+        fs=800.0,
+        grid=grid,
+        bg_boxes_px=[(0, 8, 0, 8)],
+        extent_xd_yd=(0.0, 1.0, 0.0, 1.0),
+        dj_mm=1.0,
+        shifts=(1,),
+        options=options,
+        allow_bin_padding=False,
+        use_shear_mask=False,
+    )
+
+    materialized = estimate_velocity_map(**common_kwargs)
+    streaming = estimate_velocity_map_streaming(**common_kwargs)
+
+    np.testing.assert_allclose(streaming.ux_map, materialized.ux_map, rtol=1e-6, atol=1e-6, equal_nan=True)
+    np.testing.assert_allclose(streaming.uy_map, materialized.uy_map, rtol=1e-6, atol=1e-6, equal_nan=True)
 
 
 def test_velocity_map_progress_callback_reports_all_stages() -> None:

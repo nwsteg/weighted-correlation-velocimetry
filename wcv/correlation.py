@@ -54,7 +54,15 @@ def corr_matrix_positive_shift(region_res: np.ndarray, shift: int) -> np.ndarray
 
 
 def corr_targets_for_seed_positive_shift(
-    region_res: np.ndarray, seed_idx: int, shift: int
+    region_res: np.ndarray,
+    seed_idx: int,
+    shift: int,
+    *,
+    target_row_means: np.ndarray | None = None,
+    target_row_stds: np.ndarray | None = None,
+    seed_row_means: np.ndarray | None = None,
+    seed_row_stds: np.ndarray | None = None,
+    norm_denom: float | None = None,
 ) -> np.ndarray:
     """corr[target] = corr(region[target,s:], region[seed,:-s]) for positive shift."""
     s = int(shift)
@@ -71,11 +79,33 @@ def corr_targets_for_seed_positive_shift(
     a = region_res[:, s:].astype(np.float64, copy=False)
     b = region_res[seed_idx, :-s].astype(np.float64, copy=False)
 
-    a0 = a - a.mean(axis=1, keepdims=True)
-    b0 = b - b.mean()
-    za = a0 / (a0.std(axis=1, ddof=1, keepdims=True) + 1e-12)
-    zb = b0 / (b0.std(ddof=1) + 1e-12)
-    return ((za @ zb) / float(n1 - 1)).astype(np.float32, copy=False)
+    if target_row_means is None:
+        a_means = a.mean(axis=1)
+    else:
+        a_means = np.asarray(target_row_means, dtype=np.float64)
+
+    if target_row_stds is None:
+        a_stds = a.std(axis=1, ddof=1) + 1e-12
+    else:
+        a_stds = np.asarray(target_row_stds, dtype=np.float64)
+
+    if seed_row_means is None:
+        b_mean = float(b.mean())
+    else:
+        b_mean = float(np.asarray(seed_row_means, dtype=np.float64)[seed_idx])
+
+    if seed_row_stds is None:
+        b_std = float(b.std(ddof=1) + 1e-12)
+    else:
+        b_std = float(np.asarray(seed_row_stds, dtype=np.float64)[seed_idx])
+
+    denom = float(norm_denom) if norm_denom is not None else float(n1 - 1)
+
+    a0 = a - a_means[:, None]
+    b0 = b - b_mean
+    za = a0 / a_stds[:, None]
+    zb = b0 / b_std
+    return ((za @ zb) / denom).astype(np.float32, copy=False)
 
 
 def corr_targets_for_seed_chunk_positive_shift(

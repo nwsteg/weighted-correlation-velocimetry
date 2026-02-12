@@ -252,6 +252,21 @@ def estimate_velocity_map_streaming(
         else {}
     )
 
+    shift_stats: dict[int, dict[str, np.ndarray | float]] = {}
+    for s in shifts:
+        n1 = region_res.shape[1] - int(s)
+        if n1 < 3:
+            continue
+        target_slice = region_res[:, s:].astype(np.float64, copy=False)
+        seed_slice = region_res[:, :-s].astype(np.float64, copy=False)
+        shift_stats[s] = {
+            "target_row_means": target_slice.mean(axis=1),
+            "target_row_stds": target_slice.std(axis=1, ddof=1) + 1e-12,
+            "seed_row_means": seed_slice.mean(axis=1),
+            "seed_row_stds": seed_slice.std(axis=1, ddof=1) + 1e-12,
+            "norm_denom": float(n1 - 1),
+        }
+
     seeds = np.flatnonzero(shear)
     seed_progress = stage_progress("seed loop progress", int(seeds.size)) if stage_progress is not None else None
     valid = 0
@@ -261,7 +276,20 @@ def estimate_velocity_map_streaming(
         def _corr_for_shift(s: int) -> np.ndarray:
             r = corr_cache.get(s)
             if r is None:
-                r = corr_targets_for_seed_positive_shift(region_res, int(j), int(s))
+                stats = shift_stats.get(s)
+                if stats is None:
+                    r = corr_targets_for_seed_positive_shift(region_res, int(j), int(s))
+                else:
+                    r = corr_targets_for_seed_positive_shift(
+                        region_res,
+                        int(j),
+                        int(s),
+                        target_row_means=stats["target_row_means"],
+                        target_row_stds=stats["target_row_stds"],
+                        seed_row_means=stats["seed_row_means"],
+                        seed_row_stds=stats["seed_row_stds"],
+                        norm_denom=stats["norm_denom"],
+                    )
                 corr_cache[s] = r
                 if store_corr_by_shift:
                     corr_by_shift[s][:, j] = r
