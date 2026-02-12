@@ -21,6 +21,25 @@ from .interactive import load_hardcoded_plif, make_plif_interactive_widget
 from .legacy import draw_boxes_debug, estimate_velocity_per_shift_framework
 from .types import EstimationOptions, GridSpec, SingleSeedResult, VelocityMapResult
 
+
+def load_hardcoded_plif():
+    from .interactive import load_hardcoded_plif as _impl
+
+    return _impl()
+
+
+def make_plif_interactive_widget() -> None:
+    from .interactive import make_plif_interactive_widget as _impl
+
+    return _impl()
+
+
+def launch_plif_interactive_gui() -> None:
+    from .interactive import launch_plif_interactive_gui as _impl
+
+    return _impl()
+
+
 __all__ = [
     "estimate_single_seed_velocity",
     "estimate_velocity_map",
@@ -34,4 +53,5 @@ __all__ = [
     "draw_boxes_debug",
     "load_hardcoded_plif",
     "make_plif_interactive_widget",
+    "launch_plif_interactive_gui",
 ]

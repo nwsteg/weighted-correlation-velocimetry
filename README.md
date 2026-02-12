@@ -162,18 +162,27 @@ python scripts/profile_velocity_map.py --shape 30,128,128 --bin-sizes 4,8 --mode
 CSV output now includes richer performance fields (`runtime_median_s`, `runtime_std_s`,
 `valid_frac`, `seeds_per_s`, and `corr_pairs_per_s`) to help quantify speed/memory wins.
 
-## Interactive single-seed correlation explorer (notebook)
+## Interactive single-seed correlation explorer
 
-If you want a click-driven exploratory workflow, use `examples/plif_interactive_widget.py`.
-It loads a hardcoded PLIF dataset, exposes sliders for common estimator controls
-(`PATCH_PX`, stride, shift, `rmin`, weight power), and updates the correlation map
-for whichever seed location you click on the mean image.
+You can run the explorer either as a desktop GUI from the command line (recommended for non-notebook use)
+or as a notebook widget. Both modes use the same hardcoded PLIF dataset loader.
+
+Desktop GUI mode (includes a 2D/3D toggle for the correlation map):
+
+```bash
+python -m wcv.interactive --mode gui
+```
+
+Notebook mode:
 
 ```python
 from wcv import make_plif_interactive_widget
 
 make_plif_interactive_widget()
 ```
+
+The GUI/notebook controls expose common estimator parameters (`PATCH_PX`, stride, shift, `rmin`, weight power,
+color limits), and clicking the mean image updates the selected seed and resulting correlation map.
 
 ## Package layout
 
