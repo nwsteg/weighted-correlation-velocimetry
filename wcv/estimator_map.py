@@ -7,6 +7,7 @@ import numpy as np
 
 from .correlation import (
     corr_matrix_positive_shift,
+    corr_targets_for_seed_block_positive_shift,
     corr_targets_for_seed_positive_shift,
 )
 from .geometry import (
@@ -176,6 +177,7 @@ def estimate_velocity_map_streaming(
     origin: str = "upper",
     detrend_type: str = "linear",
     store_corr_by_shift: bool = False,
+    seed_chunk_size: int = 1,
     show_progress: bool = False,
     progress_factory: Callable[[int, str], object] | None = None,
     on_progress: ProgressCallback | None = None,
@@ -268,21 +270,65 @@ def estimate_velocity_map_streaming(
         }
 
     seeds = np.flatnonzero(shear)
+    chunk_size = int(seed_chunk_size)
+    use_seed_blocks = chunk_size > 1 and seeds.size > chunk_size
     seed_progress = stage_progress("seed loop progress", int(seeds.size)) if stage_progress is not None else None
     valid = 0
-    for j in seeds:
-        corr_cache: dict[int, np.ndarray] = {}
+    if not use_seed_blocks:
+        for j in seeds:
+            corr_cache: dict[int, np.ndarray] = {}
 
-        def _corr_for_shift(s: int) -> np.ndarray:
-            r = corr_cache.get(s)
-            if r is None:
+            def _corr_for_shift(s: int) -> np.ndarray:
+                r = corr_cache.get(s)
+                if r is None:
+                    stats = shift_stats.get(s)
+                    if stats is None:
+                        r = corr_targets_for_seed_positive_shift(region_res, int(j), int(s))
+                    else:
+                        r = corr_targets_for_seed_positive_shift(
+                            region_res,
+                            int(j),
+                            int(s),
+                            target_row_means=stats["target_row_means"],
+                            target_row_stds=stats["target_row_stds"],
+                            seed_row_means=stats["seed_row_means"],
+                            seed_row_stds=stats["seed_row_stds"],
+                            norm_denom=stats["norm_denom"],
+                        )
+                    corr_cache[s] = r
+                    if store_corr_by_shift:
+                        corr_by_shift[s][:, j] = r
+                return r
+
+            ux_j, uy_j, n_any = _fit_seed_from_corr_vectors(
+                seed_idx=int(j),
+                shear=shear,
+                x_m=x_m,
+                y_m=y_m,
+                shifts=shifts,
+                fs=fs,
+                options=options,
+                corr_for_shift=_corr_for_shift,
+            )
+            used_count[j] = n_any
+            ux[j] = ux_j
+            uy[j] = uy_j
+            if np.isfinite(ux_j) and np.isfinite(uy_j):
+                valid += 1
+            if seed_progress is not None:
+                seed_progress.advance()
+    else:
+        for start in range(0, seeds.size, chunk_size):
+            seed_chunk = seeds[start : start + chunk_size]
+            corr_by_shift_block: dict[int, np.ndarray] = {}
+            for s in shifts:
                 stats = shift_stats.get(s)
                 if stats is None:
-                    r = corr_targets_for_seed_positive_shift(region_res, int(j), int(s))
+                    block = corr_targets_for_seed_block_positive_shift(region_res, seed_chunk, int(s))
                 else:
-                    r = corr_targets_for_seed_positive_shift(
+                    block = corr_targets_for_seed_block_positive_shift(
                         region_res,
-                        int(j),
+                        seed_chunk,
                         int(s),
                         target_row_means=stats["target_row_means"],
                         target_row_stds=stats["target_row_stds"],
@@ -290,28 +336,28 @@ def estimate_velocity_map_streaming(
                         seed_row_stds=stats["seed_row_stds"],
                         norm_denom=stats["norm_denom"],
                     )
-                corr_cache[s] = r
+                corr_by_shift_block[s] = block
                 if store_corr_by_shift:
-                    corr_by_shift[s][:, j] = r
-            return r
+                    corr_by_shift[s][:, seed_chunk] = block.T
 
-        ux_j, uy_j, n_any = _fit_seed_from_corr_vectors(
-            seed_idx=int(j),
-            shear=shear,
-            x_m=x_m,
-            y_m=y_m,
-            shifts=shifts,
-            fs=fs,
-            options=options,
-            corr_for_shift=_corr_for_shift,
-        )
-        used_count[j] = n_any
-        ux[j] = ux_j
-        uy[j] = uy_j
-        if np.isfinite(ux_j) and np.isfinite(uy_j):
-            valid += 1
-        if seed_progress is not None:
-            seed_progress.advance()
+            for k, j in enumerate(seed_chunk):
+                ux_j, uy_j, n_any = _fit_seed_from_corr_vectors(
+                    seed_idx=int(j),
+                    shear=shear,
+                    x_m=x_m,
+                    y_m=y_m,
+                    shifts=shifts,
+                    fs=fs,
+                    options=options,
+                    corr_for_shift=lambda s, _k=k: corr_by_shift_block[s][_k],
+                )
+                used_count[j] = n_any
+                ux[j] = ux_j
+                uy[j] = uy_j
+                if np.isfinite(ux_j) and np.isfinite(uy_j):
+                    valid += 1
+                if seed_progress is not None:
+                    seed_progress.advance()
     if seed_progress is not None:
         seed_progress.close()
 

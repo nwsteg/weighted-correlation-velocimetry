@@ -10,6 +10,7 @@ from wcv import (
 )
 from wcv.correlation import (
     corr_matrix_positive_shift,
+    corr_targets_for_seed_block_positive_shift,
     corr_targets_for_seed_chunk_positive_shift,
     corr_targets_for_seed_positive_shift,
 )
@@ -37,6 +38,19 @@ def test_seedwise_and_chunkwise_positive_shift_correlation_match_full_matrix() -
         rtol=1e-6,
         atol=1e-6,
     )
+
+
+def test_seedblock_positive_shift_correlation_matches_full_matrix() -> None:
+    rng = np.random.default_rng(44)
+    region_res = rng.standard_normal((8, 24), dtype=np.float32)
+    shift = 3
+    seed_block = np.array([0, 3, 5, 7], dtype=np.int64)
+
+    full = corr_matrix_positive_shift(region_res, shift)
+    block = corr_targets_for_seed_block_positive_shift(region_res, seed_block, shift)
+
+    assert block.shape == (seed_block.size, region_res.shape[0])
+    np.testing.assert_allclose(block, full[:, seed_block].T, rtol=1e-6, atol=1e-6)
 
 
 def test_seedwise_positive_shift_correlation_matches_with_precomputed_stats() -> None:
@@ -146,6 +160,41 @@ def test_velocity_map_streaming_matches_materialized_with_gating_and_weight_opti
     np.testing.assert_array_equal(streaming.used_count_map, materialized.used_count_map)
     assert streaming.valid_seed_count == materialized.valid_seed_count
     assert streaming.total_seed_count == materialized.total_seed_count
+
+
+def test_velocity_map_streaming_seed_block_matches_single_seed_path() -> None:
+    rng = np.random.default_rng(77)
+    movie = rng.standard_normal((30, 40, 40), dtype=np.float32)
+    grid = GridSpec(patch_px=8, grid_stride_patches=1)
+    options = EstimationOptions(
+        min_used=2,
+        rmin=0.1,
+        require_downstream=True,
+        require_dy_positive=True,
+        weight_power=1.7,
+    )
+
+    common_kwargs = dict(
+        movie=movie,
+        fs=1200.0,
+        grid=grid,
+        bg_boxes_px=[(0, 8, 0, 8)],
+        extent_xd_yd=(0.0, 1.0, 0.0, 1.0),
+        dj_mm=1.0,
+        shifts=(1, 2, 3),
+        options=options,
+        allow_bin_padding=False,
+        use_shear_mask=False,
+    )
+
+    streaming_single = estimate_velocity_map_streaming(**common_kwargs, seed_chunk_size=1)
+    streaming_block = estimate_velocity_map_streaming(**common_kwargs, seed_chunk_size=4)
+
+    np.testing.assert_allclose(streaming_block.ux_map, streaming_single.ux_map, equal_nan=True)
+    np.testing.assert_allclose(streaming_block.uy_map, streaming_single.uy_map, equal_nan=True)
+    np.testing.assert_array_equal(streaming_block.used_count_map, streaming_single.used_count_map)
+    assert streaming_block.valid_seed_count == streaming_single.valid_seed_count
+    assert streaming_block.total_seed_count == streaming_single.total_seed_count
 
 
 def test_velocity_map_streaming_single_shift_single_bin_matches_materialized() -> None:
