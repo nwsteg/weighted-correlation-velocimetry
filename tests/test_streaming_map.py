@@ -6,6 +6,7 @@ from wcv import (
     EstimationOptions,
     GridSpec,
     estimate_velocity_map,
+    estimate_velocity_map_hybrid,
     estimate_velocity_map_streaming,
 )
 from wcv.correlation import (
@@ -354,3 +355,67 @@ def test_velocity_map_sparse_corr_storage_top_k_caps_neighbors() -> None:
     for idx, vals in sparse_rows.values():
         assert idx.size <= 2
         assert vals.size <= 2
+
+
+def test_velocity_map_hybrid_matches_materialized_with_buffer_controls() -> None:
+    rng = np.random.default_rng(92)
+    movie = rng.standard_normal((28, 32, 32), dtype=np.float32)
+    grid = GridSpec(patch_px=8, grid_stride_patches=1)
+    options = EstimationOptions(min_used=1, rmin=0.0, require_downstream=True, weight_power=1.5)
+
+    common_kwargs = dict(
+        movie=movie,
+        fs=1000.0,
+        grid=grid,
+        bg_boxes_px=[(0, 8, 0, 8)],
+        extent_xd_yd=(0.0, 1.0, 0.0, 1.0),
+        dj_mm=1.0,
+        shifts=(1, 2, 3),
+        options=options,
+        allow_bin_padding=False,
+        use_shear_mask=False,
+    )
+
+    materialized = estimate_velocity_map(**common_kwargs)
+    hybrid = estimate_velocity_map_hybrid(
+        **common_kwargs,
+        seed_chunk_size=4,
+        shift_chunk_size=2,
+        max_corr_buffer_mb=0.001,
+    )
+
+    np.testing.assert_allclose(hybrid.ux_map, materialized.ux_map, equal_nan=True)
+    np.testing.assert_allclose(hybrid.uy_map, materialized.uy_map, equal_nan=True)
+    np.testing.assert_array_equal(hybrid.used_count_map, materialized.used_count_map)
+
+
+def test_velocity_map_streaming_shift_chunked_matches_unchunked() -> None:
+    rng = np.random.default_rng(93)
+    movie = rng.standard_normal((26, 32, 32), dtype=np.float32)
+    grid = GridSpec(patch_px=8, grid_stride_patches=1)
+    options = EstimationOptions(min_used=1, rmin=0.0)
+
+    common_kwargs = dict(
+        movie=movie,
+        fs=1000.0,
+        grid=grid,
+        bg_boxes_px=[(0, 8, 0, 8)],
+        extent_xd_yd=(0.0, 1.0, 0.0, 1.0),
+        dj_mm=1.0,
+        shifts=(1, 2, 3),
+        options=options,
+        allow_bin_padding=False,
+        use_shear_mask=False,
+    )
+
+    unchunked = estimate_velocity_map_streaming(**common_kwargs, seed_chunk_size=5, shift_chunk_size=None)
+    chunked = estimate_velocity_map_streaming(
+        **common_kwargs,
+        seed_chunk_size=5,
+        shift_chunk_size=1,
+        max_corr_buffer_mb=0.01,
+    )
+
+    np.testing.assert_allclose(chunked.ux_map, unchunked.ux_map, equal_nan=True)
+    np.testing.assert_allclose(chunked.uy_map, unchunked.uy_map, equal_nan=True)
+    np.testing.assert_array_equal(chunked.used_count_map, unchunked.used_count_map)

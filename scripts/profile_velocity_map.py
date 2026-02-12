@@ -2,14 +2,15 @@
 """Profile WCV map estimators across bin sizes.
 
 This script is intended to reproduce/compare the performance trade-offs between
-`estimate_velocity_map` (materialized correlation matrices) and
-`estimate_velocity_map_streaming` (seed-by-seed correlations).
+`estimate_velocity_map` (materialized correlation matrices),
+`estimate_velocity_map_streaming` (seed-by-seed correlations), and
+`estimate_velocity_map_hybrid` (batched seed/shift streaming).
 
 Examples
 --------
 # Synthetic benchmark
 python scripts/profile_velocity_map.py \
-  --mode both \
+  --mode all \
   --shape 200,1024,1024 \
   --bin-sizes 4,8,16,32 \
   --shifts 1 \
@@ -20,7 +21,7 @@ python scripts/profile_velocity_map.py \
 python scripts/profile_velocity_map.py \
   --movie-npy /path/to/movie.npy \
   --extent 0,6,-1,7 \
-  --mode both \
+  --mode all \
   --bin-sizes 4,8,16,32 \
   --shifts 1 \
   --csv-out profile_results.csv
@@ -129,6 +130,8 @@ def profile_once(
     use_shear_mask: bool,
     show_progress: bool,
     chunk_size: int | None,
+    shift_chunk_size: int | None,
+    max_corr_buffer_mb: float | None,
     do_cprofile: bool,
     profile_top: int,
 ) -> RunSummary:
@@ -148,6 +151,8 @@ def profile_once(
 
     if estimator_name == "estimate_velocity_map_streaming":
         fn = wcv.estimate_velocity_map_streaming
+    elif estimator_name == "estimate_velocity_map_hybrid":
+        fn = wcv.estimate_velocity_map_hybrid
     elif estimator_name == "estimate_velocity_map":
         fn = wcv.estimate_velocity_map
     else:
@@ -171,6 +176,8 @@ def profile_once(
         show_progress=show_progress,
         chunk_size=chunk_size,
         seed_chunk_size=chunk_size,
+        shift_chunk_size=shift_chunk_size,
+        max_corr_buffer_mb=max_corr_buffer_mb,
         return_corr_by_shift=False,
         store_corr_by_shift=False,
     )
@@ -254,11 +261,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--base-patch-px", type=int, default=2)
     p.add_argument("--bin-sizes", type=str, default="4,8,16,32")
     p.add_argument("--shifts", type=str, default="1")
-    p.add_argument("--mode", choices=["materialized", "streaming", "both"], default="both")
+    p.add_argument("--mode", choices=["materialized", "streaming", "hybrid", "all"], default="all")
     p.add_argument("--repeat", type=int, default=1)
     p.add_argument("--use-shear-mask", action="store_true")
     p.add_argument("--show-progress", action="store_true")
-    p.add_argument("--chunk-size", type=int, default=None)
+    p.add_argument("--chunk-size", type=int, default=None, help="Seed chunk size for streaming/hybrid modes")
+    p.add_argument("--shift-chunk-size", type=int, default=None, help="Shift chunk size for hybrid mode")
+    p.add_argument("--max-corr-buffer-mb", type=float, default=None, help="Max temporary correlation buffer size in MB for hybrid mode")
     p.add_argument("--rmin", type=float, default=0.3)
     p.add_argument("--min-used", type=int, default=15)
     p.add_argument("--weight-power", type=float, default=2.0)
@@ -297,12 +306,18 @@ def main() -> None:
     )
 
     estimators: list[str]
-    if args.mode == "both":
-        estimators = ["estimate_velocity_map", "estimate_velocity_map_streaming"]
+    if args.mode == "all":
+        estimators = [
+            "estimate_velocity_map",
+            "estimate_velocity_map_streaming",
+            "estimate_velocity_map_hybrid",
+        ]
     elif args.mode == "materialized":
         estimators = ["estimate_velocity_map"]
-    else:
+    elif args.mode == "streaming":
         estimators = ["estimate_velocity_map_streaming"]
+    else:
+        estimators = ["estimate_velocity_map_hybrid"]
 
     rows: list[RunSummary] = []
     print(f"Movie shape: {movie.shape}, shifts={shifts}, bins={bin_sizes}, repeat={args.repeat}")
@@ -328,6 +343,8 @@ def main() -> None:
                     use_shear_mask=bool(args.use_shear_mask),
                     show_progress=bool(args.show_progress),
                     chunk_size=args.chunk_size,
+                    shift_chunk_size=args.shift_chunk_size,
+                    max_corr_buffer_mb=args.max_corr_buffer_mb,
                     do_cprofile=bool(args.do_cprofile),
                     profile_top=int(args.profile_top),
                 )
