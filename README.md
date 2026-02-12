@@ -170,7 +170,7 @@ It loads a hardcoded PLIF dataset, exposes sliders for common estimator controls
 for whichever seed location you click on the mean image.
 
 ```python
-from examples.plif_interactive_widget import make_plif_interactive_widget
+from wcv import make_plif_interactive_widget
 
 make_plif_interactive_widget()
 ```
