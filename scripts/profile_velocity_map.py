@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Profile WCV map estimators across bin sizes.
 
-This script is intended to reproduce/compare the performance trade-offs between
-`estimate_velocity_map` (materialized correlation matrices),
-`estimate_velocity_map_streaming` (seed-by-seed correlations), and
-`estimate_velocity_map_hybrid` (batched seed/shift streaming).
+This script compares runtime/memory trade-offs across estimator modes:
+- materialized (`estimate_velocity_map`)
+- streaming (`estimate_velocity_map_streaming`)
+- hybrid (streaming with configurable chunking, when supported by API)
 
 Examples
 --------
@@ -13,9 +13,9 @@ python scripts/profile_velocity_map.py \
   --mode all \
   --shape 200,1024,1024 \
   --bin-sizes 4,8,16,32 \
-  --shifts 1 \
-  --repeat 2 \
-  --profile-top 25
+  --shifts 1,2 \
+  --repeat 3 \
+  --hybrid-chunk-size 256
 
 # Real data saved as .npy (nt, ny, nx)
 python scripts/profile_velocity_map.py \
@@ -66,6 +66,35 @@ class RunSummary:
     nt: int
     ny: int
     nx: int
+    shift_count: int
+
+
+@dataclass
+class ProfileSummary:
+    estimator: str
+    bin_px: int
+    runtime_s: float
+    runtime_median_s: float
+    runtime_std_s: float
+    peak_mem_mb: float
+    valid_seed_count: int
+    total_seed_count: int
+    valid_frac: float
+    n_regions: int
+    nt: int
+    ny: int
+    nx: int
+    shift_count: int
+    seeds_per_s: float
+    corr_pairs: int
+    corr_pairs_per_s: float
+
+
+@dataclass
+class EstimatorSpec:
+    label: str
+    fn_name: str
+    chunk_size: int | None
 
 
 def parse_csv_ints(text: str) -> tuple[int, ...]:
@@ -87,10 +116,11 @@ def load_movie(movie_npy: str | None, shape: tuple[int, int, int], seed: int) ->
     return rng.standard_normal(shape, dtype=np.float32)
 
 
-def call_estimator(fn: Any, **kwargs: Any) -> Any:
+def call_estimator(fn: Any, **kwargs: Any) -> tuple[Any, set[str]]:
     sig = inspect.signature(fn)
     use_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
-    return fn(**use_kwargs)
+    ignored = set(kwargs).difference(use_kwargs)
+    return fn(**use_kwargs), ignored
 
 
 def make_bg_boxes(
@@ -116,9 +146,21 @@ def make_bg_boxes(
     ]
 
 
+def _print_cprofile_stats(profiler: cProfile.Profile, estimator: str, bin_px: int, top: int) -> None:
+    print(f"\n--- cProfile (cumtime): {estimator}, bin={bin_px} ---")
+    s_cum = io.StringIO()
+    pstats.Stats(profiler, stream=s_cum).sort_stats("cumtime").print_stats(top)
+    print(s_cum.getvalue())
+
+    print(f"--- cProfile (tottime): {estimator}, bin={bin_px} ---")
+    s_tot = io.StringIO()
+    pstats.Stats(profiler, stream=s_tot).sort_stats("tottime").print_stats(top)
+    print(s_tot.getvalue())
+
+
 def profile_once(
     *,
-    estimator_name: str,
+    estimator: EstimatorSpec,
     movie: np.ndarray,
     fs: float,
     extent: tuple[float, float, float, float],
@@ -129,12 +171,9 @@ def profile_once(
     options: EstimationOptions,
     use_shear_mask: bool,
     show_progress: bool,
-    chunk_size: int | None,
-    shift_chunk_size: int | None,
-    max_corr_buffer_mb: float | None,
     do_cprofile: bool,
     profile_top: int,
-) -> RunSummary:
+) -> tuple[RunSummary, set[str]]:
     stride = bin_px // base_patch_px
     grid = GridSpec(patch_px=base_patch_px, grid_stride_patches=stride)
     _, ny, nx = movie.shape
@@ -149,14 +188,9 @@ def profile_once(
         anchors=((0.10, 0.10), (0.25, 0.96), (0.90, 0.80)),
     )
 
-    if estimator_name == "estimate_velocity_map_streaming":
-        fn = wcv.estimate_velocity_map_streaming
-    elif estimator_name == "estimate_velocity_map_hybrid":
-        fn = wcv.estimate_velocity_map_hybrid
-    elif estimator_name == "estimate_velocity_map":
-        fn = wcv.estimate_velocity_map
-    else:
-        raise ValueError(f"Unknown estimator: {estimator_name}")
+    if not hasattr(wcv, estimator.fn_name):
+        raise ValueError(f"Unknown estimator function on wcv module: {estimator.fn_name}")
+    fn = getattr(wcv, estimator.fn_name)
 
     kwargs = dict(
         movie=movie,
@@ -174,10 +208,8 @@ def profile_once(
         origin="upper",
         detrend_type="linear",
         show_progress=show_progress,
-        chunk_size=chunk_size,
-        seed_chunk_size=chunk_size,
-        shift_chunk_size=shift_chunk_size,
-        max_corr_buffer_mb=max_corr_buffer_mb,
+        chunk_size=estimator.chunk_size,
+        seed_chunk_size=estimator.chunk_size,
         return_corr_by_shift=False,
         store_corr_by_shift=False,
     )
@@ -187,7 +219,7 @@ def profile_once(
     t0 = time.perf_counter()
     if profiler is not None:
         profiler.enable()
-    vm = call_estimator(fn, **kwargs)
+    vm, ignored_kwargs = call_estimator(fn, **kwargs)
     if profiler is not None:
         profiler.disable()
     runtime_s = time.perf_counter() - t0
@@ -195,27 +227,81 @@ def profile_once(
     tracemalloc.stop()
 
     if profiler is not None:
-        s = io.StringIO()
-        pstats.Stats(profiler, stream=s).sort_stats("cumtime").print_stats(profile_top)
-        print(f"\n--- cProfile: {estimator_name}, bin={bin_px} ---")
-        print(s.getvalue())
+        _print_cprofile_stats(profiler, estimator.label, bin_px, profile_top)
 
     n_regions = int(vm.by * vm.bx)
-    return RunSummary(
-        estimator=estimator_name,
-        bin_px=bin_px,
-        runtime_s=runtime_s,
-        peak_mem_mb=peak / (1024 * 1024),
-        valid_seed_count=int(vm.valid_seed_count),
-        total_seed_count=int(vm.total_seed_count),
-        n_regions=n_regions,
-        nt=int(movie.shape[0]),
-        ny=int(movie.shape[1]),
-        nx=int(movie.shape[2]),
+    return (
+        RunSummary(
+            estimator=estimator.label,
+            bin_px=bin_px,
+            runtime_s=runtime_s,
+            peak_mem_mb=peak / (1024 * 1024),
+            valid_seed_count=int(vm.valid_seed_count),
+            total_seed_count=int(vm.total_seed_count),
+            n_regions=n_regions,
+            nt=int(movie.shape[0]),
+            ny=int(movie.shape[1]),
+            nx=int(movie.shape[2]),
+            shift_count=len(shifts),
+        ),
+        ignored_kwargs,
     )
 
 
-def write_csv(path: Path, rows: list[RunSummary]) -> None:
+def summarize_runs(runs: list[RunSummary]) -> ProfileSummary:
+    if not runs:
+        raise ValueError("runs cannot be empty")
+    best = min(runs, key=lambda r: r.runtime_s)
+    runtime_arr = np.asarray([r.runtime_s for r in runs], dtype=np.float64)
+    valid_frac = 0.0 if best.total_seed_count == 0 else best.valid_seed_count / best.total_seed_count
+    seeds_per_s = 0.0 if best.runtime_s <= 0 else best.total_seed_count / best.runtime_s
+    corr_pairs = int(best.n_regions * best.total_seed_count * best.shift_count)
+    corr_pairs_per_s = 0.0 if best.runtime_s <= 0 else corr_pairs / best.runtime_s
+
+    return ProfileSummary(
+        estimator=best.estimator,
+        bin_px=best.bin_px,
+        runtime_s=float(best.runtime_s),
+        runtime_median_s=float(np.median(runtime_arr)),
+        runtime_std_s=float(np.std(runtime_arr, ddof=0)),
+        peak_mem_mb=float(best.peak_mem_mb),
+        valid_seed_count=int(best.valid_seed_count),
+        total_seed_count=int(best.total_seed_count),
+        valid_frac=float(valid_frac),
+        n_regions=int(best.n_regions),
+        nt=int(best.nt),
+        ny=int(best.ny),
+        nx=int(best.nx),
+        shift_count=int(best.shift_count),
+        seeds_per_s=float(seeds_per_s),
+        corr_pairs=int(corr_pairs),
+        corr_pairs_per_s=float(corr_pairs_per_s),
+    )
+
+
+def print_relative_summary(rows: list[ProfileSummary]) -> None:
+    grouped: dict[int, list[ProfileSummary]] = {}
+    for row in rows:
+        grouped.setdefault(row.bin_px, []).append(row)
+
+    print("\nRelative comparison (per bin):")
+    for bin_px in sorted(grouped):
+        items = grouped[bin_px]
+        baseline = next((r for r in items if r.estimator == "materialized"), None)
+        if baseline is None:
+            baseline = min(items, key=lambda r: r.runtime_s)
+        print(f"  bin={bin_px}: baseline={baseline.estimator}")
+        for r in sorted(items, key=lambda x: x.runtime_s):
+            speedup = baseline.runtime_s / r.runtime_s if r.runtime_s > 0 else np.nan
+            mem_ratio = r.peak_mem_mb / baseline.peak_mem_mb if baseline.peak_mem_mb > 0 else np.nan
+            print(
+                f"    {r.estimator:<12} time={r.runtime_s:8.3f}s "
+                f"speedup_vs_base={speedup:6.2f}x "
+                f"peak={r.peak_mem_mb:8.1f}MB mem_vs_base={mem_ratio:6.2f}x"
+            )
+
+
+def write_csv(path: Path, rows: list[ProfileSummary]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
@@ -224,13 +310,20 @@ def write_csv(path: Path, rows: list[RunSummary]) -> None:
                 "estimator",
                 "bin_px",
                 "runtime_s",
+                "runtime_median_s",
+                "runtime_std_s",
                 "peak_mem_mb",
                 "valid_seed_count",
                 "total_seed_count",
+                "valid_frac",
                 "n_regions",
                 "nt",
                 "ny",
                 "nx",
+                "shift_count",
+                "seeds_per_s",
+                "corr_pairs",
+                "corr_pairs_per_s",
             ]
         )
         for r in rows:
@@ -239,13 +332,20 @@ def write_csv(path: Path, rows: list[RunSummary]) -> None:
                     r.estimator,
                     r.bin_px,
                     f"{r.runtime_s:.6f}",
+                    f"{r.runtime_median_s:.6f}",
+                    f"{r.runtime_std_s:.6f}",
                     f"{r.peak_mem_mb:.3f}",
                     r.valid_seed_count,
                     r.total_seed_count,
+                    f"{r.valid_frac:.6f}",
                     r.n_regions,
                     r.nt,
                     r.ny,
                     r.nx,
+                    r.shift_count,
+                    f"{r.seeds_per_s:.3f}",
+                    r.corr_pairs,
+                    f"{r.corr_pairs_per_s:.1f}",
                 ]
             )
 
@@ -261,13 +361,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--base-patch-px", type=int, default=2)
     p.add_argument("--bin-sizes", type=str, default="4,8,16,32")
     p.add_argument("--shifts", type=str, default="1")
-    p.add_argument("--mode", choices=["materialized", "streaming", "hybrid", "all"], default="all")
+    p.add_argument(
+        "--mode",
+        choices=["materialized", "streaming", "hybrid", "both", "all"],
+        default="all",
+    )
     p.add_argument("--repeat", type=int, default=1)
+    p.add_argument("--hybrid-chunk-size", type=int, default=256)
+    p.add_argument("--streaming-chunk-size", type=int, default=None)
     p.add_argument("--use-shear-mask", action="store_true")
     p.add_argument("--show-progress", action="store_true")
-    p.add_argument("--chunk-size", type=int, default=None, help="Seed chunk size for streaming/hybrid modes")
-    p.add_argument("--shift-chunk-size", type=int, default=None, help="Shift chunk size for hybrid mode")
-    p.add_argument("--max-corr-buffer-mb", type=float, default=None, help="Max temporary correlation buffer size in MB for hybrid mode")
     p.add_argument("--rmin", type=float, default=0.3)
     p.add_argument("--min-used", type=int, default=15)
     p.add_argument("--weight-power", type=float, default=2.0)
@@ -275,6 +378,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--profile-top", type=int, default=20)
     p.add_argument("--csv-out", type=str, default=None, help="Optional CSV output path")
     return p.parse_args()
+
+
+def resolve_estimators(args: argparse.Namespace) -> list[EstimatorSpec]:
+    all_specs = {
+        "materialized": EstimatorSpec("materialized", "estimate_velocity_map", None),
+        "streaming": EstimatorSpec("streaming", "estimate_velocity_map_streaming", args.streaming_chunk_size),
+        "hybrid": EstimatorSpec("hybrid", "estimate_velocity_map_streaming", args.hybrid_chunk_size),
+    }
+    if args.mode in {"all", "both"}:
+        return [all_specs["materialized"], all_specs["streaming"], all_specs["hybrid"]]
+    return [all_specs[args.mode]]
 
 
 def main() -> None:
@@ -305,33 +419,25 @@ def main() -> None:
         padding_mode="edge",
     )
 
-    estimators: list[str]
-    if args.mode == "all":
-        estimators = [
-            "estimate_velocity_map",
-            "estimate_velocity_map_streaming",
-            "estimate_velocity_map_hybrid",
-        ]
-    elif args.mode == "materialized":
-        estimators = ["estimate_velocity_map"]
-    elif args.mode == "streaming":
-        estimators = ["estimate_velocity_map_streaming"]
-    else:
-        estimators = ["estimate_velocity_map_hybrid"]
+    estimators = resolve_estimators(args)
 
-    rows: list[RunSummary] = []
-    print(f"Movie shape: {movie.shape}, shifts={shifts}, bins={bin_sizes}, repeat={args.repeat}")
+    rows: list[ProfileSummary] = []
+    print(
+        f"Movie shape: {movie.shape}, shifts={shifts}, bins={bin_sizes}, repeat={args.repeat}, "
+        f"modes={[e.label for e in estimators]}"
+    )
 
+    warned_ignored: set[str] = set()
     for bin_px in bin_sizes:
         if bin_px % args.base_patch_px != 0:
             print(f"[skip] bin {bin_px}: not divisible by base_patch_px={args.base_patch_px}")
             continue
 
-        for estimator_name in estimators:
-            best: RunSummary | None = None
+        for estimator in estimators:
+            runs: list[RunSummary] = []
             for _ in range(args.repeat):
-                run = profile_once(
-                    estimator_name=estimator_name,
+                run, ignored_kwargs = profile_once(
+                    estimator=estimator,
                     movie=movie,
                     fs=float(args.fs),
                     extent=(float(extent[0]), float(extent[1]), float(extent[2]), float(extent[3])),
@@ -342,22 +448,30 @@ def main() -> None:
                     options=opts,
                     use_shear_mask=bool(args.use_shear_mask),
                     show_progress=bool(args.show_progress),
-                    chunk_size=args.chunk_size,
-                    shift_chunk_size=args.shift_chunk_size,
-                    max_corr_buffer_mb=args.max_corr_buffer_mb,
                     do_cprofile=bool(args.do_cprofile),
                     profile_top=int(args.profile_top),
                 )
-                if best is None or run.runtime_s < best.runtime_s:
-                    best = run
+                runs.append(run)
 
-            assert best is not None
-            rows.append(best)
+                ignored_nonnull = {k for k in ignored_kwargs if k in {"chunk_size", "seed_chunk_size"}}
+                if ignored_nonnull and estimator.label not in warned_ignored:
+                    print(
+                        f"[note] {estimator.label}: estimator API ignored {sorted(ignored_nonnull)}; "
+                        "chunked hybrid controls are unavailable in this install."
+                    )
+                    warned_ignored.add(estimator.label)
+
+            summary = summarize_runs(runs)
+            rows.append(summary)
             print(
-                f"[{best.estimator}] bin={best.bin_px:>3d} | "
-                f"time={best.runtime_s:8.3f}s | peak={best.peak_mem_mb:8.1f} MB | "
-                f"valid={best.valid_seed_count}/{best.total_seed_count}"
+                f"[{summary.estimator}] bin={summary.bin_px:>3d} | "
+                f"best={summary.runtime_s:8.3f}s median={summary.runtime_median_s:8.3f}s "
+                f"std={summary.runtime_std_s:7.4f}s | peak={summary.peak_mem_mb:8.1f} MB | "
+                f"valid={summary.valid_seed_count}/{summary.total_seed_count} "
+                f"({100.0 * summary.valid_frac:5.1f}%) | seeds/s={summary.seeds_per_s:8.1f}"
             )
+
+    print_relative_summary(rows)
 
     if args.csv_out:
         out = Path(args.csv_out)

@@ -136,44 +136,31 @@ Ux, Uy, diag = estimate_velocity_per_shift_framework(
 ```
 
 
-
-## Sparse correlation storage mode for map estimation
-
-`estimate_velocity_map(...)` now supports a sparse correlation storage path that keeps only
-"useful" per-seed/per-shift correlations instead of full `(target, seed)` dense matrices.
-
-- Enable via function kwargs: `sparse_corr_storage=True`, optional `sparse_top_k=<int>`.
-- Or set defaults in `EstimationOptions(sparse_corr_storage=True, sparse_top_k=...)`.
-- Sparse rows store `(indices, values)` per seed where values pass `r >= rmin` plus the
-  estimator gating rules; with `sparse_top_k`, only the strongest `k` entries are retained.
-
-Tradeoff:
-
-- **Memory:** can drop dramatically when `rmin` is moderate/high and/or `top_k` is small.
-- **Runtime:** may be slightly higher due to row-wise filtering and sparse bookkeeping.
-- **Backward compatibility:** dense correlation matrices remain the default behavior.
-
 ## Profiling map estimators
 
 Use `scripts/profile_velocity_map.py` to compare runtime and peak Python memory between
-materialized and streaming map estimators over multiple bin sizes.
+materialized, streaming, and hybrid map-estimator modes over multiple bin sizes.
 
 ```bash
 python scripts/profile_velocity_map.py \
   --movie-npy /path/to/movie.npy \
   --extent 0,6,-1,7 \
-  --mode both \
+  --mode all \
   --bin-sizes 4,8,16,32 \
   --shifts 1 \
   --repeat 2 \
+  --hybrid-chunk-size 256 \
   --csv-out profile_results.csv
 ```
 
 For a fast synthetic dry run (no input file required):
 
 ```bash
-python scripts/profile_velocity_map.py --shape 30,128,128 --bin-sizes 4,8 --mode both
+python scripts/profile_velocity_map.py --shape 30,128,128 --bin-sizes 4,8 --mode all
 ```
+
+CSV output now includes richer performance fields (`runtime_median_s`, `runtime_std_s`,
+`valid_frac`, `seeds_per_s`, and `corr_pairs_per_s`) to help quantify speed/memory wins.
 
 ## Package layout
 
