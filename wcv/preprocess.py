@@ -1,9 +1,23 @@
 from __future__ import annotations
 
+import logging
+import os
 from typing import Iterable
 
 import numpy as np
 from scipy.signal import detrend as scipy_detrend
+
+
+logger = logging.getLogger(__name__)
+_DEBUG_DTYPES = os.getenv("WCV_DEBUG_DTYPES", "0") == "1"
+
+
+def _debug_assert_float32(name: str, arr: np.ndarray) -> None:
+    if not _DEBUG_DTYPES:
+        return
+    if arr.dtype != np.float32:
+        raise AssertionError(f"{name} expected float32, got {arr.dtype}")
+    logger.debug("%s dtype=%s shape=%s", name, arr.dtype, arr.shape)
 
 
 def detrend_series(y: np.ndarray, axis: int = -1, detrend_type: str = "linear") -> np.ndarray:
@@ -13,15 +27,19 @@ def detrend_series(y: np.ndarray, axis: int = -1, detrend_type: str = "linear") 
 
 
 def zscore_1d(y: np.ndarray, eps: float = 1e-12) -> np.ndarray:
-    arr = np.asarray(y, dtype=np.float32)
-    centered = arr - arr.mean()
-    return (centered / (centered.std(ddof=1) + eps)).astype(np.float32, copy=False)
+    arr = np.array(y, dtype=np.float32, copy=True)
+    _debug_assert_float32("zscore_1d.arr", arr)
+    arr -= arr.mean()
+    arr /= arr.std(ddof=1) + np.float32(eps)
+    return arr
 
 
 def regress_out_common_mode_2d(y: np.ndarray, g: np.ndarray, dtype_out=np.float32) -> np.ndarray:
     """Regress out common-mode signals from each row of y using intercept + g columns."""
-    y = np.asarray(y, dtype=np.float64)
-    g = np.asarray(g, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float32)
+    g = np.asarray(g, dtype=np.float32)
+    _debug_assert_float32("regress_out_common_mode_2d.y", y)
+    _debug_assert_float32("regress_out_common_mode_2d.g", g)
 
     if y.ndim != 2:
         raise ValueError(f"y must be 2D (n_series, nt). Got {y.ndim}D")
@@ -34,10 +52,15 @@ def regress_out_common_mode_2d(y: np.ndarray, g: np.ndarray, dtype_out=np.float3
     if g.shape[0] != nt:
         raise ValueError(f"time mismatch: y.shape[1]={nt} vs g.shape[0]={g.shape[0]}")
 
-    x = np.column_stack([np.ones(nt), g])
+    x = np.empty((nt, g.shape[1] + 1), dtype=np.float32)
+    x[:, 0] = 1.0
+    x[:, 1:] = g
+    _debug_assert_float32("regress_out_common_mode_2d.x", x)
     b, *_ = np.linalg.lstsq(x, y.T, rcond=None)
-    yhat = (x @ b).T
-    return (y - yhat).astype(dtype_out, copy=False)
+    yhat = (x @ b).T.astype(np.float32, copy=False)
+    out = np.array(y, dtype=np.float32, copy=True)
+    out -= yhat
+    return out.astype(dtype_out, copy=False)
 
 
 def block_mean_timeseries(movie: np.ndarray, bin_px: int) -> tuple[np.ndarray, int, int]:
