@@ -230,6 +230,8 @@ def estimate_velocity_map_streaming(
     detrend_type: str = "linear",
     store_corr_by_shift: bool = False,
     seed_chunk_size: int = 1,
+    shift_chunk_size: int | None = None,
+    max_corr_buffer_mb: float | None = None,
     show_progress: bool = False,
     progress_factory: Callable[[int, str], object] | None = None,
     on_progress: ProgressCallback | None = None,
@@ -322,11 +324,23 @@ def estimate_velocity_map_streaming(
         }
 
     seeds = np.flatnonzero(shear)
-    chunk_size = int(seed_chunk_size)
+    chunk_size = 1 if seed_chunk_size is None else max(1, int(seed_chunk_size))
+    shift_chunk = len(shifts) if shift_chunk_size is None else max(1, int(shift_chunk_size))
+    shift_chunk = min(shift_chunk, len(shifts))
+
+    if max_corr_buffer_mb is not None:
+        max_buffer_bytes = int(float(max_corr_buffer_mb) * 1024 * 1024)
+        if max_buffer_bytes <= 0:
+            raise ValueError("max_corr_buffer_mb must be > 0 when provided")
+        bytes_per_seed_for_shift_chunk = int(shift_chunk * n_regions * np.dtype(np.float32).itemsize)
+        if bytes_per_seed_for_shift_chunk <= 0:
+            bytes_per_seed_for_shift_chunk = 1
+        chunk_size = max(1, min(chunk_size, max_buffer_bytes // bytes_per_seed_for_shift_chunk))
+
     use_seed_blocks = chunk_size > 1 and seeds.size > chunk_size
     seed_progress = stage_progress("seed loop progress", int(seeds.size)) if stage_progress is not None else None
     valid = 0
-    if not use_seed_blocks:
+    if not use_seed_blocks and shift_chunk == len(shifts):
         for j in seeds:
             corr_cache: dict[int, np.ndarray] = {}
 
@@ -370,40 +384,77 @@ def estimate_velocity_map_streaming(
             if seed_progress is not None:
                 seed_progress.advance()
     else:
+        tau_by_shift = {s: float(s) / float(fs) for s in shifts}
         for start in range(0, seeds.size, chunk_size):
             seed_chunk = seeds[start : start + chunk_size]
-            corr_by_shift_block: dict[int, np.ndarray] = {}
-            for s in shifts:
-                stats = shift_stats.get(s)
-                if stats is None:
-                    block = corr_targets_for_seed_block_positive_shift(region_res, seed_chunk, int(s))
-                else:
-                    block = corr_targets_for_seed_block_positive_shift(
-                        region_res,
-                        seed_chunk,
-                        int(s),
-                        target_row_means=stats["target_row_means"],
-                        target_row_stds=stats["target_row_stds"],
-                        seed_row_means=stats["seed_row_means"],
-                        seed_row_stds=stats["seed_row_stds"],
-                        norm_denom=stats["norm_denom"],
-                    )
-                corr_by_shift_block[s] = block
-                if store_corr_by_shift:
-                    corr_by_shift[s][:, seed_chunk] = block.T
+            numer_x = np.zeros(seed_chunk.size, dtype=np.float64)
+            numer_y = np.zeros(seed_chunk.size, dtype=np.float64)
+            denom = np.zeros(seed_chunk.size, dtype=np.float64)
+            used_chunk = np.zeros(seed_chunk.size, dtype=np.int32)
+
+            dx_block = x_m[None, :] - x_m[seed_chunk][:, None]
+            dy_block = y_m[None, :] - y_m[seed_chunk][:, None]
+            gate_block = np.broadcast_to(shear[None, :], (seed_chunk.size, n_regions)).copy()
+            gate_block[np.arange(seed_chunk.size), seed_chunk] = False
+            if options.require_downstream:
+                gate_block &= dx_block > 0
+
+            for shift_start in range(0, len(shifts), shift_chunk):
+                shift_slice = shifts[shift_start : shift_start + shift_chunk]
+                corr_by_shift_block: dict[int, np.ndarray] = {}
+
+                for s in shift_slice:
+                    stats = shift_stats.get(s)
+                    if stats is None:
+                        block = corr_targets_for_seed_block_positive_shift(region_res, seed_chunk, int(s))
+                    else:
+                        block = corr_targets_for_seed_block_positive_shift(
+                            region_res,
+                            seed_chunk,
+                            int(s),
+                            target_row_means=stats["target_row_means"],
+                            target_row_stds=stats["target_row_stds"],
+                            seed_row_means=stats["seed_row_means"],
+                            seed_row_stds=stats["seed_row_stds"],
+                            norm_denom=stats["norm_denom"],
+                        )
+                    corr_by_shift_block[s] = block
+                    if store_corr_by_shift:
+                        corr_by_shift[s][:, seed_chunk] = block.T
+
+                for s in shift_slice:
+                    tau = tau_by_shift[s]
+                    block = corr_by_shift_block[s]
+                    keep = gate_block & np.isfinite(block) & (block > 0) & (block >= options.rmin)
+                    if options.require_dy_positive:
+                        keep &= dy_block > 0
+
+                    for k in range(seed_chunk.size):
+                        m = keep[k]
+                        n = int(m.sum())
+                        if n < options.min_used:
+                            continue
+                        vals = block[k, m]
+                        weights = vals.astype(np.float64) ** options.weight_power
+                        wsum = float(weights.sum())
+                        if wsum <= 0 or not np.isfinite(wsum):
+                            continue
+
+                        dxs = float(np.sum(weights * dx_block[k, m]) / wsum)
+                        dys = float(np.sum(weights * dy_block[k, m]) / wsum)
+                        numer_x[k] += tau * dxs
+                        numer_y[k] += tau * dys
+                        denom[k] += tau * tau
+                        used_chunk[k] += n
 
             for k, j in enumerate(seed_chunk):
-                ux_j, uy_j, n_any = _fit_seed_from_corr_vectors(
-                    seed_idx=int(j),
-                    shear=shear,
-                    x_m=x_m,
-                    y_m=y_m,
-                    shifts=shifts,
-                    fs=fs,
-                    options=options,
-                    corr_for_shift=lambda s, _k=k: corr_by_shift_block[s][_k],
-                )
-                used_count[j] = n_any
+                if denom[k] > 0:
+                    ux_j = float(numer_x[k] / denom[k])
+                    uy_j = float(numer_y[k] / denom[k])
+                else:
+                    ux_j, uy_j = np.nan, np.nan
+
+                used_count[j] = used_chunk[k]
                 ux[j] = ux_j
                 uy[j] = uy_j
                 if np.isfinite(ux_j) and np.isfinite(uy_j):
@@ -428,6 +479,55 @@ def estimate_velocity_map_streaming(
         padded=padded,
         original_shape=original_shape,
         padded_shape=padded_shape,
+    )
+
+
+def estimate_velocity_map_hybrid(
+    movie: np.ndarray,
+    fs: float,
+    grid: GridSpec,
+    bg_boxes_px: list[tuple[int, int, int, int]],
+    extent_xd_yd: tuple[float, float, float, float],
+    dj_mm: float,
+    shifts: tuple[int, ...] = (1,),
+    options: EstimationOptions = EstimationOptions(),
+    allow_bin_padding: bool = False,
+    use_shear_mask: bool = True,
+    shear_mask_px: np.ndarray | None = None,
+    shear_pctl: float = 50,
+    origin: str = "upper",
+    detrend_type: str = "linear",
+    store_corr_by_shift: bool = False,
+    seed_chunk_size: int = 64,
+    shift_chunk_size: int | None = None,
+    max_corr_buffer_mb: float | None = 512.0,
+    show_progress: bool = False,
+    progress_factory: Callable[[int, str], object] | None = None,
+    on_progress: ProgressCallback | None = None,
+) -> VelocityMapResult:
+    """Hybrid map estimator using bounded blockwise seed/shift correlation batches."""
+    return estimate_velocity_map_streaming(
+        movie=movie,
+        fs=fs,
+        grid=grid,
+        bg_boxes_px=bg_boxes_px,
+        extent_xd_yd=extent_xd_yd,
+        dj_mm=dj_mm,
+        shifts=shifts,
+        options=options,
+        allow_bin_padding=allow_bin_padding,
+        use_shear_mask=use_shear_mask,
+        shear_mask_px=shear_mask_px,
+        shear_pctl=shear_pctl,
+        origin=origin,
+        detrend_type=detrend_type,
+        store_corr_by_shift=store_corr_by_shift,
+        seed_chunk_size=seed_chunk_size,
+        shift_chunk_size=shift_chunk_size,
+        max_corr_buffer_mb=max_corr_buffer_mb,
+        show_progress=show_progress,
+        progress_factory=progress_factory,
+        on_progress=on_progress,
     )
 
 def estimate_velocity_map(
