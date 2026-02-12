@@ -1,6 +1,21 @@
 from __future__ import annotations
 
+import logging
+import os
+
 import numpy as np
+
+
+logger = logging.getLogger(__name__)
+_DEBUG_DTYPES = os.getenv("WCV_DEBUG_DTYPES", "0") == "1"
+
+
+def _debug_assert_float32(name: str, arr: np.ndarray) -> None:
+    if not _DEBUG_DTYPES:
+        return
+    if arr.dtype != np.float32:
+        raise AssertionError(f"{name} expected float32, got {arr.dtype}")
+    logger.debug("%s dtype=%s shape=%s", name, arr.dtype, arr.shape)
 
 
 def sparse_useful_corr_row(
@@ -56,33 +71,23 @@ def shifted_corr_regions(region_res: np.ndarray, seed_res: np.ndarray, shift: in
 
     a = np.asarray(a, dtype=np.float32)
     b = np.asarray(b, dtype=np.float32)
+    _debug_assert_float32("shifted_corr_regions.a", a)
+    _debug_assert_float32("shifted_corr_regions.b", b)
 
-    b0 = b - b.mean()
-    bstd = b0.std(ddof=1) + 1e-12
-    a0 = a - a.mean(axis=1, keepdims=True)
-    astd = a0.std(axis=1, ddof=1) + 1e-12
+    b0 = np.array(b, dtype=np.float32, copy=True)
+    b0 -= b0.mean()
+    bstd = b0.std(ddof=1) + np.float32(1e-12)
+    a0 = np.array(a, dtype=np.float32, copy=True)
+    a0 -= a0.mean(axis=1, keepdims=True)
+    astd = a0.std(axis=1, ddof=1) + np.float32(1e-12)
     cov = (a0 @ b0) / (n - 1)
     return (cov / (astd * bstd)).astype(np.float32, copy=False)
 
 
 def corr_matrix_positive_shift(region_res: np.ndarray, shift: int) -> np.ndarray:
     """R[target, seed] = corr(region[target,s:], region[seed,:-s]) for positive shift."""
-    s = int(shift)
-    if s <= 0:
-        raise ValueError("shift must be > 0")
-    n, nt = region_res.shape
-    n1 = nt - s
-    if n1 < 3:
-        return np.full((n, n), np.nan, dtype=np.float32)
-
-    a = region_res[:, s:].astype(np.float64, copy=False)
-    b = region_res[:, :-s].astype(np.float64, copy=False)
-
-    a0 = a - a.mean(axis=1, keepdims=True)
-    b0 = b - b.mean(axis=1, keepdims=True)
-    za = a0 / (a0.std(axis=1, ddof=1, keepdims=True) + 1e-12)
-    zb = b0 / (b0.std(axis=1, ddof=1, keepdims=True) + 1e-12)
-    return ((za @ zb.T) / float(n1 - 1)).astype(np.float32, copy=False)
+    seed_indices = np.arange(region_res.shape[0], dtype=np.int64)
+    return corr_targets_for_seed_chunk_positive_shift(region_res, seed_indices, shift)
 
 
 def corr_targets_for_seed_positive_shift(
@@ -97,47 +102,9 @@ def corr_targets_for_seed_positive_shift(
     norm_denom: float | None = None,
 ) -> np.ndarray:
     """corr[target] = corr(region[target,s:], region[seed,:-s]) for positive shift."""
-    s = int(shift)
-    if s <= 0:
-        raise ValueError("shift must be > 0")
-    n_regions, nt = region_res.shape
-    if seed_idx < 0 or seed_idx >= n_regions:
-        raise IndexError("seed_idx out of bounds")
-
-    n1 = nt - s
-    if n1 < 3:
-        return np.full(n_regions, np.nan, dtype=np.float32)
-
-    a = region_res[:, s:].astype(np.float64, copy=False)
-    b = region_res[seed_idx, :-s].astype(np.float64, copy=False)
-
-    if target_row_means is None:
-        a_means = a.mean(axis=1)
-    else:
-        a_means = np.asarray(target_row_means, dtype=np.float64)
-
-    if target_row_stds is None:
-        a_stds = a.std(axis=1, ddof=1) + 1e-12
-    else:
-        a_stds = np.asarray(target_row_stds, dtype=np.float64)
-
-    if seed_row_means is None:
-        b_mean = float(b.mean())
-    else:
-        b_mean = float(np.asarray(seed_row_means, dtype=np.float64)[seed_idx])
-
-    if seed_row_stds is None:
-        b_std = float(b.std(ddof=1) + 1e-12)
-    else:
-        b_std = float(np.asarray(seed_row_stds, dtype=np.float64)[seed_idx])
-
-    denom = float(norm_denom) if norm_denom is not None else float(n1 - 1)
-
-    a0 = a - a_means[:, None]
-    b0 = b - b_mean
-    za = a0 / a_stds[:, None]
-    zb = b0 / b_std
-    return ((za @ zb) / denom).astype(np.float32, copy=False)
+    del target_row_means, target_row_stds, seed_row_means, seed_row_stds, norm_denom
+    seed_indices = np.array([seed_idx], dtype=np.int64)
+    return corr_targets_for_seed_chunk_positive_shift(region_res, seed_indices, shift)[:, 0]
 
 
 def corr_targets_for_seed_chunk_positive_shift(
@@ -162,14 +129,17 @@ def corr_targets_for_seed_chunk_positive_shift(
     if n1 < 3:
         return np.full((n_regions, seed_indices.size), np.nan, dtype=np.float32)
 
-    a = region_res[:, s:].astype(np.float64, copy=False)
-    b = region_res[seed_indices, :-s].astype(np.float64, copy=False)
+    a = np.array(region_res[:, s:], dtype=np.float32, copy=True)
+    b = np.array(region_res[seed_indices, :-s], dtype=np.float32, copy=True)
+    _debug_assert_float32("corr_targets_for_seed_chunk_positive_shift.a", a)
+    _debug_assert_float32("corr_targets_for_seed_chunk_positive_shift.b", b)
 
-    a0 = a - a.mean(axis=1, keepdims=True)
-    b0 = b - b.mean(axis=1, keepdims=True)
-    za = a0 / (a0.std(axis=1, ddof=1, keepdims=True) + 1e-12)
-    zb = b0 / (b0.std(axis=1, ddof=1, keepdims=True) + 1e-12)
-    return ((za @ zb.T) / float(n1 - 1)).astype(np.float32, copy=False)
+    a -= a.mean(axis=1, keepdims=True)
+    b -= b.mean(axis=1, keepdims=True)
+    a /= a.std(axis=1, ddof=1, keepdims=True) + np.float32(1e-12)
+    b /= b.std(axis=1, ddof=1, keepdims=True) + np.float32(1e-12)
+    denom = np.float32(n1 - 1)
+    return ((a @ b.T) / denom).astype(np.float32, copy=False)
 
 
 def corr_targets_for_seed_block_positive_shift(
@@ -187,46 +157,5 @@ def corr_targets_for_seed_block_positive_shift(
 
     Returns matrix with shape ``(k, n_regions)`` where ``k = len(seed_indices)``.
     """
-    s = int(shift)
-    if s <= 0:
-        raise ValueError("shift must be > 0")
-
-    seed_indices = np.asarray(seed_indices, dtype=np.int64)
-    n_regions, nt = region_res.shape
-    if seed_indices.ndim != 1:
-        raise ValueError("seed_indices must be a 1D array")
-    if np.any(seed_indices < 0) or np.any(seed_indices >= n_regions):
-        raise IndexError("seed_indices out of bounds")
-
-    n1 = nt - s
-    if n1 < 3:
-        return np.full((seed_indices.size, n_regions), np.nan, dtype=np.float32)
-
-    a = region_res[:, s:].astype(np.float64, copy=False)
-    b = region_res[seed_indices, :-s].astype(np.float64, copy=False)
-
-    if target_row_means is None:
-        a_means = a.mean(axis=1)
-    else:
-        a_means = np.asarray(target_row_means, dtype=np.float64)
-
-    if target_row_stds is None:
-        a_stds = a.std(axis=1, ddof=1) + 1e-12
-    else:
-        a_stds = np.asarray(target_row_stds, dtype=np.float64)
-
-    if seed_row_means is None:
-        b_means = b.mean(axis=1)
-    else:
-        b_means = np.asarray(seed_row_means, dtype=np.float64)[seed_indices]
-
-    if seed_row_stds is None:
-        b_stds = b.std(axis=1, ddof=1) + 1e-12
-    else:
-        b_stds = np.asarray(seed_row_stds, dtype=np.float64)[seed_indices]
-
-    denom = float(norm_denom) if norm_denom is not None else float(n1 - 1)
-
-    za = (a - a_means[:, None]) / a_stds[:, None]
-    zb = (b - b_means[:, None]) / b_stds[:, None]
-    return ((zb @ za.T) / denom).astype(np.float32, copy=False)
+    del target_row_means, target_row_stds, seed_row_means, seed_row_stds, norm_denom
+    return corr_targets_for_seed_chunk_positive_shift(region_res, seed_indices, shift).T
