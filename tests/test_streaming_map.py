@@ -13,6 +13,7 @@ from wcv.correlation import (
     corr_targets_for_seed_block_positive_shift,
     corr_targets_for_seed_chunk_positive_shift,
     corr_targets_for_seed_positive_shift,
+    sparse_useful_corr_row,
 )
 
 
@@ -280,3 +281,76 @@ def test_streaming_velocity_map_progress_factory_per_stage_callback() -> None:
 
     assert stage_done["preprocessing"] == (4, 4)
     assert stage_done["seed loop progress"] == (9, 9)
+
+
+def test_sparse_useful_corr_row_applies_threshold_and_top_k() -> None:
+    corr = np.array([0.1, 0.6, np.nan, 0.8, 0.4, -0.2], dtype=np.float32)
+    gate = np.array([True, True, True, True, True, False])
+
+    idx_all, vals_all = sparse_useful_corr_row(corr, candidate_mask=gate, rmin=0.3)
+    np.testing.assert_array_equal(idx_all, np.array([1, 3, 4], dtype=np.int32))
+    np.testing.assert_allclose(vals_all, np.array([0.6, 0.8, 0.4], dtype=np.float32))
+
+    idx_top2, vals_top2 = sparse_useful_corr_row(corr, candidate_mask=gate, rmin=0.3, top_k=2)
+    np.testing.assert_array_equal(idx_top2, np.array([1, 3], dtype=np.int32))
+    np.testing.assert_allclose(vals_top2, np.array([0.6, 0.8], dtype=np.float32))
+
+
+def test_velocity_map_sparse_corr_storage_matches_dense_fit() -> None:
+    rng = np.random.default_rng(123)
+    movie = rng.standard_normal((24, 32, 32), dtype=np.float32)
+    grid = GridSpec(patch_px=8, grid_stride_patches=1)
+    options = EstimationOptions(min_used=1, rmin=0.05, require_downstream=True, weight_power=1.3)
+
+    common_kwargs = dict(
+        movie=movie,
+        fs=1000.0,
+        grid=grid,
+        bg_boxes_px=[(0, 8, 0, 8)],
+        extent_xd_yd=(0.0, 1.0, 0.0, 1.0),
+        dj_mm=1.0,
+        shifts=(1, 2),
+        options=options,
+        allow_bin_padding=False,
+        use_shear_mask=False,
+    )
+
+    dense = estimate_velocity_map(**common_kwargs)
+    sparse = estimate_velocity_map(**common_kwargs, sparse_corr_storage=True)
+
+    np.testing.assert_allclose(sparse.ux_map, dense.ux_map, equal_nan=True)
+    np.testing.assert_allclose(sparse.uy_map, dense.uy_map, equal_nan=True)
+    np.testing.assert_array_equal(sparse.used_count_map, dense.used_count_map)
+
+    seed_count = dense.by * dense.bx
+    for shift in (1, 2):
+        assert isinstance(sparse.corr_by_shift[shift], dict)
+        assert len(sparse.corr_by_shift[shift]) == seed_count
+
+
+def test_velocity_map_sparse_corr_storage_top_k_caps_neighbors() -> None:
+    rng = np.random.default_rng(456)
+    movie = rng.standard_normal((24, 32, 32), dtype=np.float32)
+    grid = GridSpec(patch_px=8, grid_stride_patches=1)
+    options = EstimationOptions(min_used=1, rmin=0.0, require_downstream=False)
+
+    sparse = estimate_velocity_map(
+        movie=movie,
+        fs=1000.0,
+        grid=grid,
+        bg_boxes_px=[(0, 8, 0, 8)],
+        extent_xd_yd=(0.0, 1.0, 0.0, 1.0),
+        dj_mm=1.0,
+        shifts=(1,),
+        options=options,
+        allow_bin_padding=False,
+        use_shear_mask=False,
+        sparse_corr_storage=True,
+        sparse_top_k=2,
+    )
+
+    sparse_rows = sparse.corr_by_shift[1]
+    assert isinstance(sparse_rows, dict)
+    for idx, vals in sparse_rows.values():
+        assert idx.size <= 2
+        assert vals.size <= 2

@@ -136,6 +136,23 @@ Ux, Uy, diag = estimate_velocity_per_shift_framework(
 ```
 
 
+
+## Sparse correlation storage mode for map estimation
+
+`estimate_velocity_map(...)` now supports a sparse correlation storage path that keeps only
+"useful" per-seed/per-shift correlations instead of full `(target, seed)` dense matrices.
+
+- Enable via function kwargs: `sparse_corr_storage=True`, optional `sparse_top_k=<int>`.
+- Or set defaults in `EstimationOptions(sparse_corr_storage=True, sparse_top_k=...)`.
+- Sparse rows store `(indices, values)` per seed where values pass `r >= rmin` plus the
+  estimator gating rules; with `sparse_top_k`, only the strongest `k` entries are retained.
+
+Tradeoff:
+
+- **Memory:** can drop dramatically when `rmin` is moderate/high and/or `top_k` is small.
+- **Runtime:** may be slightly higher due to row-wise filtering and sparse bookkeeping.
+- **Backward compatibility:** dense correlation matrices remain the default behavior.
+
 ## Profiling map estimators
 
 Use `scripts/profile_velocity_map.py` to compare runtime and peak Python memory between

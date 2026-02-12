@@ -9,6 +9,7 @@ from .correlation import (
     corr_matrix_positive_shift,
     corr_targets_for_seed_block_positive_shift,
     corr_targets_for_seed_positive_shift,
+    sparse_useful_corr_row,
 )
 from .geometry import (
     build_shear_mask_patchvec,
@@ -83,6 +84,57 @@ def _fit_seed_from_corr_vectors(
         taus.append(s / float(fs))
         dxs.append(float(np.sum(w * dx_all[m]) / wsum))
         dys.append(float(np.sum(w * dy_all[m]) / wsum))
+        n_any += n
+
+    if not taus:
+        return np.nan, np.nan, n_any
+
+    taus_arr = np.asarray(taus)
+    denom = np.sum(taus_arr * taus_arr)
+    if denom <= 0:
+        return np.nan, np.nan, n_any
+
+    ux_j = float(np.sum(taus_arr * np.asarray(dxs)) / denom)
+    uy_j = float(np.sum(taus_arr * np.asarray(dys)) / denom)
+    return ux_j, uy_j, n_any
+
+
+def _fit_seed_from_sparse_vectors(
+    *,
+    seed_idx: int,
+    x_m: np.ndarray,
+    y_m: np.ndarray,
+    shifts: tuple[int, ...],
+    fs: float,
+    options: EstimationOptions,
+    sparse_corr_for_shift: Callable[[int], tuple[np.ndarray, np.ndarray]],
+) -> tuple[float, float, int]:
+    dx_all = x_m - x_m[seed_idx]
+    dy_all = y_m - y_m[seed_idx]
+
+    taus, dxs, dys = [], [], []
+    n_any = 0
+    for s in shifts:
+        idx, vals = sparse_corr_for_shift(int(s))
+        if idx.size == 0:
+            continue
+
+        if options.require_dy_positive:
+            keep = dy_all[idx] > 0
+            idx = idx[keep]
+            vals = vals[keep]
+        n = int(idx.size)
+        if n < options.min_used:
+            continue
+
+        w = (vals.astype(np.float64) ** options.weight_power)
+        wsum = w.sum()
+        if wsum <= 0 or not np.isfinite(wsum):
+            continue
+
+        taus.append(s / float(fs))
+        dxs.append(float(np.sum(w * dx_all[idx]) / wsum))
+        dys.append(float(np.sum(w * dy_all[idx]) / wsum))
         n_any += n
 
     if not taus:
@@ -393,6 +445,8 @@ def estimate_velocity_map(
     shear_pctl: float = 50,
     origin: str = "upper",
     detrend_type: str = "linear",
+    sparse_corr_storage: bool | None = None,
+    sparse_top_k: int | None = None,
     show_progress: bool = False,
     progress_factory: Callable[[int, str], object] | None = None,
     on_progress: ProgressCallback | None = None,
@@ -460,14 +514,12 @@ def estimate_velocity_map(
     if not shifts:
         raise ValueError("shifts must include at least one positive integer")
 
-    corr_by_shift: dict[int, np.ndarray] = {}
-    shift_progress = stage_progress("per-shift processing", len(shifts)) if stage_progress is not None else None
-    for s in shifts:
-        corr_by_shift[s] = corr_matrix_positive_shift(region_res, s)
-        if shift_progress is not None:
-            shift_progress.advance()
-    if shift_progress is not None:
-        shift_progress.close()
+    use_sparse_corr_storage = (
+        options.sparse_corr_storage if sparse_corr_storage is None else bool(sparse_corr_storage)
+    )
+    sparse_top_k_value = options.sparse_top_k if sparse_top_k is None else sparse_top_k
+    if sparse_top_k_value is not None and int(sparse_top_k_value) <= 0:
+        raise ValueError("sparse_top_k must be > 0 when provided")
 
     n_regions = by * bx
     ux = np.full(n_regions, np.nan, dtype=np.float32)
@@ -477,24 +529,101 @@ def estimate_velocity_map(
     seeds = np.flatnonzero(shear)
     seed_progress = stage_progress("seed loop progress", int(seeds.size)) if stage_progress is not None else None
     valid = 0
-    for j in seeds:
-        ux_j, uy_j, n_any = _fit_seed_from_corr_vectors(
-            seed_idx=int(j),
-            shear=shear,
-            x_m=x_m,
-            y_m=y_m,
-            shifts=shifts,
-            fs=fs,
-            options=options,
-            corr_for_shift=lambda s, _j=int(j): corr_by_shift[s][:, _j],
-        )
-        used_count[j] = n_any
-        ux[j] = ux_j
-        uy[j] = uy_j
-        if np.isfinite(ux_j) and np.isfinite(uy_j):
-            valid += 1
-        if seed_progress is not None:
-            seed_progress.advance()
+
+    if not use_sparse_corr_storage:
+        corr_by_shift: dict[int, np.ndarray | dict[int, tuple[np.ndarray, np.ndarray]]] = {}
+        shift_progress = stage_progress("per-shift processing", len(shifts)) if stage_progress is not None else None
+        for s in shifts:
+            corr_by_shift[s] = corr_matrix_positive_shift(region_res, s)
+            if shift_progress is not None:
+                shift_progress.advance()
+        if shift_progress is not None:
+            shift_progress.close()
+
+        for j in seeds:
+            ux_j, uy_j, n_any = _fit_seed_from_corr_vectors(
+                seed_idx=int(j),
+                shear=shear,
+                x_m=x_m,
+                y_m=y_m,
+                shifts=shifts,
+                fs=fs,
+                options=options,
+                corr_for_shift=lambda s, _j=int(j): np.asarray(corr_by_shift[s])[:, _j],
+            )
+            used_count[j] = n_any
+            ux[j] = ux_j
+            uy[j] = uy_j
+            if np.isfinite(ux_j) and np.isfinite(uy_j):
+                valid += 1
+            if seed_progress is not None:
+                seed_progress.advance()
+    else:
+        corr_by_shift = {s: {} for s in shifts}
+        shift_stats: dict[int, dict[str, np.ndarray | float]] = {}
+        for s in shifts:
+            n1 = region_res.shape[1] - int(s)
+            if n1 < 3:
+                continue
+            target_slice = region_res[:, s:].astype(np.float64, copy=False)
+            seed_slice = region_res[:, :-s].astype(np.float64, copy=False)
+            shift_stats[s] = {
+                "target_row_means": target_slice.mean(axis=1),
+                "target_row_stds": target_slice.std(axis=1, ddof=1) + 1e-12,
+                "seed_row_means": seed_slice.mean(axis=1),
+                "seed_row_stds": seed_slice.std(axis=1, ddof=1) + 1e-12,
+                "norm_denom": float(n1 - 1),
+            }
+
+        for j in seeds:
+            gate = shear.copy()
+            gate[int(j)] = False
+            dx_all = x_m - x_m[int(j)]
+            if options.require_downstream:
+                gate &= dx_all > 0
+
+            sparse_cache: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+
+            for s in shifts:
+                stats = shift_stats.get(s)
+                if stats is None:
+                    corr_row = corr_targets_for_seed_positive_shift(region_res, int(j), int(s))
+                else:
+                    corr_row = corr_targets_for_seed_positive_shift(
+                        region_res,
+                        int(j),
+                        int(s),
+                        target_row_means=stats["target_row_means"],
+                        target_row_stds=stats["target_row_stds"],
+                        seed_row_means=stats["seed_row_means"],
+                        seed_row_stds=stats["seed_row_stds"],
+                        norm_denom=stats["norm_denom"],
+                    )
+                sparse_cache[s] = sparse_useful_corr_row(
+                    corr_row,
+                    candidate_mask=gate,
+                    rmin=options.rmin,
+                    top_k=sparse_top_k_value,
+                )
+                corr_by_shift[s][int(j)] = sparse_cache[s]
+
+            ux_j, uy_j, n_any = _fit_seed_from_sparse_vectors(
+                seed_idx=int(j),
+                x_m=x_m,
+                y_m=y_m,
+                shifts=shifts,
+                fs=fs,
+                options=options,
+                sparse_corr_for_shift=lambda s: sparse_cache[s],
+            )
+            used_count[j] = n_any
+            ux[j] = ux_j
+            uy[j] = uy_j
+            if np.isfinite(ux_j) and np.isfinite(uy_j):
+                valid += 1
+            if seed_progress is not None:
+                seed_progress.advance()
+
     if seed_progress is not None:
         seed_progress.close()
 

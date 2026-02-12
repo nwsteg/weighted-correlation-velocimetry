@@ -3,6 +3,38 @@ from __future__ import annotations
 import numpy as np
 
 
+def sparse_useful_corr_row(
+    corr_row: np.ndarray,
+    *,
+    candidate_mask: np.ndarray,
+    rmin: float,
+    top_k: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Select useful correlations from a dense target-vector into sparse form.
+
+    Returns ``(indices, values)`` where ``indices`` are target-bin indices and
+    ``values`` are the corresponding correlations.
+    """
+    r = np.asarray(corr_row, dtype=np.float32)
+    keep = np.asarray(candidate_mask, dtype=bool) & np.isfinite(r) & (r > 0) & (r >= float(rmin))
+    idx = np.flatnonzero(keep)
+    if idx.size == 0:
+        return idx.astype(np.int32), np.empty(0, dtype=np.float32)
+
+    vals = r[idx]
+    if top_k is not None:
+        k = int(top_k)
+        if k <= 0:
+            raise ValueError("top_k must be > 0 when provided")
+        if idx.size > k:
+            order = np.argpartition(vals, -k)[-k:]
+            idx = idx[order]
+            vals = vals[order]
+
+    order = np.argsort(idx)
+    return idx[order].astype(np.int32, copy=False), vals[order].astype(np.float32, copy=False)
+
+
 def shifted_corr_regions(region_res: np.ndarray, seed_res: np.ndarray, shift: int) -> np.ndarray:
     """Pearson correlation between seed(t) and region_i(t+shift)."""
     nt = seed_res.size
