@@ -135,6 +135,33 @@ Ux, Uy, diag = estimate_velocity_per_shift_framework(
 )
 ```
 
+
+## Profiling map estimators
+
+Use `scripts/profile_velocity_map.py` to compare runtime and peak Python memory between
+materialized, streaming, and hybrid map-estimator modes over multiple bin sizes.
+
+```bash
+python scripts/profile_velocity_map.py \
+  --movie-npy /path/to/movie.npy \
+  --extent 0,6,-1,7 \
+  --mode all \
+  --bin-sizes 4,8,16,32 \
+  --shifts 1 \
+  --repeat 2 \
+  --hybrid-chunk-size 256 \
+  --csv-out profile_results.csv
+```
+
+For a fast synthetic dry run (no input file required):
+
+```bash
+python scripts/profile_velocity_map.py --shape 30,128,128 --bin-sizes 4,8 --mode all
+```
+
+CSV output now includes richer performance fields (`runtime_median_s`, `runtime_std_s`,
+`valid_frac`, `seeds_per_s`, and `corr_pairs_per_s`) to help quantify speed/memory wins.
+
 ## Package layout
 
 - `wcv/preprocess.py`: detrending, z-scoring, common-mode regression, block means.
