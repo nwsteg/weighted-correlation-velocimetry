@@ -17,6 +17,7 @@ from .estimator_map import (
     estimate_velocity_map_streaming,
 )
 from .estimator_single_seed import estimate_single_seed_velocity
+from .interactive import load_hardcoded_plif, make_plif_interactive_widget
 from .legacy import draw_boxes_debug, estimate_velocity_per_shift_framework
 from .types import EstimationOptions, GridSpec, SingleSeedResult, VelocityMapResult
 
