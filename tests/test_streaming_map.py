@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+import numpy as np
+
+from wcv import (
+    EstimationOptions,
+    GridSpec,
+    estimate_velocity_map,
+    estimate_velocity_map_streaming,
+)
+from wcv.correlation import (
+    corr_matrix_positive_shift,
+    corr_targets_for_seed_chunk_positive_shift,
+    corr_targets_for_seed_positive_shift,
+)
+
+
+def test_seedwise_and_chunkwise_positive_shift_correlation_match_full_matrix() -> None:
+    rng = np.random.default_rng(11)
+    region_res = rng.standard_normal((7, 20), dtype=np.float32)
+    shift = 2
+
+    full = corr_matrix_positive_shift(region_res, shift)
+
+    for seed in range(region_res.shape[0]):
+        np.testing.assert_allclose(
+            corr_targets_for_seed_positive_shift(region_res, seed, shift),
+            full[:, seed],
+            rtol=1e-6,
+            atol=1e-6,
+        )
+
+    seed_chunk = np.array([1, 4, 6], dtype=np.int64)
+    np.testing.assert_allclose(
+        corr_targets_for_seed_chunk_positive_shift(region_res, seed_chunk, shift),
+        full[:, seed_chunk],
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+
+def test_velocity_map_streaming_matches_materialized_and_skips_corr_storage_by_default() -> None:
+    rng = np.random.default_rng(12)
+    movie = rng.standard_normal((24, 32, 32), dtype=np.float32)
+    grid = GridSpec(patch_px=8, grid_stride_patches=1)
+    options = EstimationOptions(min_used=1, rmin=0.0)
+
+    common_kwargs = dict(
+        movie=movie,
+        fs=1000.0,
+        grid=grid,
+        bg_boxes_px=[(0, 8, 0, 8)],
+        extent_xd_yd=(0.0, 1.0, 0.0, 1.0),
+        dj_mm=1.0,
+        shifts=(1, 2),
+        options=options,
+        allow_bin_padding=False,
+        use_shear_mask=False,
+    )
+
+    materialized = estimate_velocity_map(**common_kwargs)
+    streaming = estimate_velocity_map_streaming(**common_kwargs)
+    streaming_with_corr = estimate_velocity_map_streaming(
+        **common_kwargs,
+        store_corr_by_shift=True,
+    )
+
+    np.testing.assert_allclose(streaming.ux_map, materialized.ux_map, equal_nan=True)
+    np.testing.assert_allclose(streaming.uy_map, materialized.uy_map, equal_nan=True)
+    np.testing.assert_array_equal(streaming.used_count_map, materialized.used_count_map)
+    assert streaming.valid_seed_count == materialized.valid_seed_count
+    assert streaming.total_seed_count == materialized.total_seed_count
+
+    assert streaming.corr_by_shift == {}
+    assert set(streaming_with_corr.corr_by_shift) == {1, 2}
+    np.testing.assert_allclose(
+        streaming_with_corr.corr_by_shift[1],
+        materialized.corr_by_shift[1],
+        rtol=1e-6,
+        atol=1e-6,
+        equal_nan=True,
+    )
