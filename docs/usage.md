@@ -109,6 +109,50 @@ vm = estimate_velocity_map(
 print("map valid seeds:", vm.valid_seed_count, "/", vm.total_seed_count)
 ```
 
+
+
+## Progress hooks (notebook-friendly)
+
+Both map estimators support optional progress hooks:
+
+- `show_progress=True`: uses `tqdm.auto.tqdm` when available
+- `progress_factory(total, stage)`: custom per-stage progress sink
+- `on_progress(done, total, stage)`: direct callback
+
+```python
+from wcv import estimate_velocity_map, estimate_velocity_map_streaming
+
+# Notebook/CLI auto progress bars (falls back to no-op if tqdm is unavailable)
+vm = estimate_velocity_map(
+    movie=movie,
+    fs=50_000,
+    grid=grid,
+    bg_boxes_px=bg_boxes_px,
+    extent_xd_yd=extent,
+    dj_mm=Dj,
+    shifts=(1, 2),
+    options=opts,
+    show_progress=True,
+)
+
+# Custom callback for logging stage-level updates
+updates = []
+_ = estimate_velocity_map_streaming(
+    movie=movie,
+    fs=50_000,
+    grid=grid,
+    bg_boxes_px=bg_boxes_px,
+    extent_xd_yd=extent,
+    dj_mm=Dj,
+    shifts=(1, 2),
+    options=opts,
+    on_progress=lambda done, total, stage: updates.append((stage, done, total)),
+)
+```
+
+Typical `stage` values include `preprocessing`, `per-shift processing` (materialized map estimator),
+and `seed loop progress`.
+
 ## Building docs locally
 
 ```bash
