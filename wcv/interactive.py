@@ -13,7 +13,9 @@ from dataclasses import dataclass
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.patches import Circle
 from matplotlib.widgets import RadioButtons, Slider
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  # needed for 3D projection side effect
 
 from .estimator_single_seed import estimate_single_seed_velocity
@@ -119,6 +121,48 @@ def _compute_corr_result(
     return result, seed_box, corr_grid, bin_px, edge_clipped, edge_distance, support_radius
 
 
+def _edge_circle_params(
+    *,
+    result,
+    shift: int,
+    weight_power: float,
+    bin_px: int,
+    nx: int,
+    ny: int,
+    extent_xd_yd: tuple[float, float, float, float],
+) -> tuple[float, float, float] | None:
+    mask = np.asarray(result.mask_by_shift.get(int(shift), np.array([], dtype=bool)), dtype=bool)
+    corr = np.asarray(result.corr_by_shift.get(int(shift), np.array([], dtype=float)), dtype=float)
+    if mask.size != result.by * result.bx or corr.size != mask.size:
+        return None
+
+    idx = np.flatnonzero(mask)
+    if idx.size == 0:
+        return None
+
+    weights = (np.abs(corr[idx]).astype(np.float64) ** float(weight_power))
+    wsum = float(weights.sum())
+    if wsum <= 0 or not np.isfinite(wsum):
+        return None
+
+    rows = (idx // result.bx).astype(np.float64)
+    cols = (idx % result.bx).astype(np.float64)
+    r_bar = float(np.sum(weights * rows) / wsum)
+    c_bar = float(np.sum(weights * cols) / wsum)
+
+    xpix = c_bar * bin_px + (bin_px - 1) / 2.0
+    ypix = r_bar * bin_px + (bin_px - 1) / 2.0
+    xmin, xmax, ymin, ymax = map(float, extent_xd_yd)
+    x_center = float(np.interp(xpix, [0, nx - 1], [xmin, xmax]))
+    y_center = float(np.interp(ypix, [0, ny - 1], [ymax, ymin]))
+
+    support_radius = float((result.support_radius_by_shift or {}).get(int(shift), np.nan))
+    if not np.isfinite(support_radius):
+        return None
+    radius_x = abs(float((support_radius * float(bin_px) * (xmax - xmin)) / max(nx - 1, 1)))
+    return x_center, y_center, radius_x
+
+
 def make_plif_interactive_widget() -> None:
     """Create and display an interactive seed-click correlation explorer in notebooks."""
     try:
@@ -161,6 +205,7 @@ def make_plif_interactive_widget() -> None:
     ax_img.imshow(mean_img, cmap="gray", extent=extent_xd_yd, origin="upper")
     click_marker, = ax_img.plot([], [], "r+", ms=12, mew=2)
     seed_rect = None
+    edge_circle = None
     surf = None
 
     corr_im = ax_corr2d.imshow(
@@ -171,7 +216,9 @@ def make_plif_interactive_widget() -> None:
         extent=extent_xd_yd,
         origin="upper",
     )
-    plt.colorbar(corr_im, ax=ax_corr2d, label="corr")
+    divider = make_axes_locatable(ax_corr2d)
+    cax = divider.append_axes("right", size="4%", pad=0.06)
+    plt.colorbar(corr_im, cax=cax, label="corr")
 
     state = {"px": None, "py": None}
 
@@ -208,7 +255,7 @@ def make_plif_interactive_widget() -> None:
             ax_corr3d.set_zlabel("corr")
 
     def _update(*_args):
-        nonlocal seed_rect
+        nonlocal seed_rect, edge_circle
         if state["px"] is None or state["py"] is None:
             return
         try:
@@ -237,6 +284,31 @@ def make_plif_interactive_widget() -> None:
                 seed_rect.remove()
             seed_rect = plt.Rectangle((x0d, min(y0d, y1d)), x1d - x0d, abs(y1d - y0d), fill=False, ec="yellow", lw=1.5)
             ax_img.add_patch(seed_rect)
+
+            circle_params = _edge_circle_params(
+                result=result,
+                shift=int(shift.value),
+                weight_power=float(weight_power.value),
+                bin_px=int(bin_px_val),
+                nx=nx,
+                ny=ny,
+                extent_xd_yd=extent_xd_yd,
+            )
+            if edge_circle is not None:
+                edge_circle.remove()
+                edge_circle = None
+            if circle_params is not None:
+                cx, cy, radius_x = circle_params
+                edge_circle = Circle(
+                    (cx, cy),
+                    radius_x,
+                    fill=False,
+                    lw=2.0,
+                    ls="--",
+                    ec=("red" if edge_clipped else "lime"),
+                )
+                ax_corr2d.add_patch(edge_circle)
+
 
             status.value = (
                 f"<b>Seed:</b> ({state['px']:.3f}, {state['py']:.3f}) | "
@@ -295,7 +367,9 @@ def launch_plif_interactive_gui() -> None:
         extent=extent_xd_yd,
         origin="upper",
     )
-    plt.colorbar(corr_im, ax=ax_corr2d, label="corr")
+    divider = make_axes_locatable(ax_corr2d)
+    cax = divider.append_axes("right", size="4%", pad=0.06)
+    plt.colorbar(corr_im, cax=cax, label="corr")
 
     ax_patch = fig.add_axes([0.08, 0.14, 0.30, 0.03])
     ax_stride = fig.add_axes([0.08, 0.10, 0.30, 0.03])
@@ -317,6 +391,7 @@ def launch_plif_interactive_gui() -> None:
 
     status_txt = fig.text(0.05, 0.01, "Click the mean image to choose a seed.", fontsize=10)
     seed_rect = None
+    edge_circle = None
     surf = None
     state = {"px": None, "py": None}
 
@@ -353,7 +428,7 @@ def launch_plif_interactive_gui() -> None:
             ax_corr3d.set_zlabel("corr")
 
     def _update(*_args):
-        nonlocal seed_rect
+        nonlocal seed_rect, edge_circle
         if state["px"] is None or state["py"] is None:
             return
         try:
@@ -382,6 +457,31 @@ def launch_plif_interactive_gui() -> None:
                 seed_rect.remove()
             seed_rect = plt.Rectangle((x0d, min(y0d, y1d)), x1d - x0d, abs(y1d - y0d), fill=False, ec="yellow", lw=1.5)
             ax_img.add_patch(seed_rect)
+
+            circle_params = _edge_circle_params(
+                result=result,
+                shift=int(s_shift.val),
+                weight_power=float(s_weight.val),
+                bin_px=int(bin_px_val),
+                nx=nx,
+                ny=ny,
+                extent_xd_yd=extent_xd_yd,
+            )
+            if edge_circle is not None:
+                edge_circle.remove()
+                edge_circle = None
+            if circle_params is not None:
+                cx, cy, radius_x = circle_params
+                edge_circle = Circle(
+                    (cx, cy),
+                    radius_x,
+                    fill=False,
+                    lw=2.0,
+                    ls="--",
+                    ec=("red" if edge_clipped else "lime"),
+                )
+                ax_corr2d.add_patch(edge_circle)
+
 
             status_txt.set_text(
                 f"Seed=({state['px']:.3f}, {state['py']:.3f}) | bin_px={bin_px_val} | "
