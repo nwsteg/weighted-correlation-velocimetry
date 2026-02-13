@@ -295,6 +295,32 @@ So this uncertainty tells you, cell-by-cell, **"How much does my answer depend o
 analysis settings?"** It does **not** by itself capture all uncertainty sources (e.g., camera
 noise, model mismatch, or temporal sampling variability unless you also add bootstrap).
 
+### Two-stage uncertainty (bootstrap + parameter ensemble)
+
+When `bootstrap_result` is provided to `run_parameter_ensemble_uncertainty`, WCV reports three
+related maps for each component:
+
+- `sigma_param`: spread across the parameter-ensemble runs (analysis-choice sensitivity).
+- `sigma_boot`: spread from block bootstrap replicates (finite-data temporal resampling).
+- `sigma_total`: a combined uncertainty computed as
+  `sqrt(sigma_param**2 + sigma_boot**2)`.
+
+In practice, this gives a useful decomposition: where `sigma_param` dominates, your estimate is
+most sensitive to tuning choices; where `sigma_boot` dominates, your estimate is mostly limited by
+finite noisy data.
+
+### What these uncertainty maps are **not**
+
+These are **precision/sensitivity** metrics, not direct **accuracy** metrics relative to the true
+convection velocity. A small `sigma_param`, `sigma_boot`, or `sigma_total` means the estimate is
+internally stable under the tested perturbations; it does **not** prove the estimate is close to a
+physical ground truth.
+
+In particular, these maps do not by themselves quantify systematic bias from sources such as model
+mismatch, calibration error, optical distortion, tracer non-ideal behavior, or out-of-plane motion.
+Absolute-accuracy claims still require external validation (for example synthetic-truth tests,
+benchmark flows, or independent diagnostics).
+
 ## Building docs locally
 
 ```bash
