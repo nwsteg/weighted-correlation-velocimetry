@@ -86,6 +86,18 @@ Code:
 - map mode per-seed accumulation:
   - `used_count`, lag-wise `taus/dxs/dys`
 
+Edge-clipping guard (optional):
+
+- enabled by `EstimationOptions.edge_clip_reject_k`
+- computes weighted centroid/spread in bin-index space from accepted bins
+- rejects lag contribution when `edge_distance < edge_clip_reject_k * support_radius`
+- diagnostics surfaced as:
+  - single seed: `edge_clipped_by_shift`, `edge_distance_by_shift`, `support_radius_by_shift`
+  - map mode: `edge_clipped_by_shift` boolean maps by lag
+
+The same accepted-bin weights (`|corr|**weight_power`) drive both displacement
+centroids and edge-clipping support radius.
+
 ## 7) Fit velocity across lags
 
 Theory: no-intercept fit of displacement vs lag time.
@@ -100,6 +112,16 @@ Code:
 - `SingleSeedResult` returns velocity, per-lag maps/masks, and fit diagnostics.
 - `VelocityMapResult` returns `ux_map`, `uy_map`, accepted-count map, seed-mask info, and validity counts.
 - Both include padding metadata (`padded`, `original_shape`, `padded_shape`).
+
+## 9) Seed mask vs target mask in map estimators
+
+Map estimators expose independent controls for:
+
+- seed locations (`seed_mask_px` -> `seed_gate_vec`)
+- candidate target bins (`shear_mask_px` with `use_shear_mask=True` -> `target_gate_vec`)
+
+When `seed_mask_px` is omitted, seed gating defaults to the target gate for backward
+compatibility.
 
 ## Compatibility layer
 

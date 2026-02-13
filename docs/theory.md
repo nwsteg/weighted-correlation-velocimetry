@@ -124,6 +124,49 @@ Repository variables:
 - `dx_bar_by_shift[s]`, `dy_bar_by_shift[s]`, `n_used_by_shift[s]` (single seed)
 - `used_count_map` accumulation (map mode)
 
+### Edge-clipping guard (single-seed and map modes)
+
+When `options.edge_clip_reject_k` is enabled (not `None`), each lag also
+computes a weighted support geometry over the accepted bins for that lag.
+
+Using accepted-bin grid indices `(r_j, c_j)` and the same weights used in the
+centroid displacement (`w_j = |r_j|^p`), define:
+
+$$
+\bar r = \frac{\sum_j w_j r_j}{\sum_j w_j}, \qquad
+\bar c = \frac{\sum_j w_j c_j}{\sum_j w_j}
+$$
+
+$$
+\sigma_r^2 = \frac{\sum_j w_j (r_j-\bar r)^2}{\sum_j w_j}, \qquad
+\sigma_c^2 = \frac{\sum_j w_j (c_j-\bar c)^2}{\sum_j w_j}
+$$
+
+$$
+r_{\text{support}} = k_\sigma \sqrt{\sigma_r^2 + \sigma_c^2},
+\qquad k_\sigma = \texttt{options.edge\_clip\_sigma\_mult}
+$$
+
+$$
+d_{\text{edge}} = \min\left(\bar r,\,\bar c,\,(B_y-1)-\bar r,\,(B_x-1)-\bar c\right)
+$$
+
+The lag is edge-clipped if:
+
+$$
+d_{\text{edge}} < k\,r_{\text{support}},
+\qquad k=\texttt{options.edge\_clip\_reject\_k}.
+$$
+
+So `edge k = 1` means “reject this lag when the weighted centroid is within
+one support radius of an image edge.” This is why the plotted `r` in the UI is
+blob-dependent: it comes directly from accepted-bin spread and weights.
+
+Additional diagnostics exposed by this step:
+
+- single seed: `edge_clipped_by_shift`, `edge_distance_by_shift`, `support_radius_by_shift`
+- map mode: `edge_clipped_by_shift` (boolean map per lag)
+
 Note: this implementation does **not** pick a single best lag by max-$r$ per pixel. It combines accepted information per lag and then fits across lag values.
 
 ## 6. From lag to velocity
@@ -157,12 +200,22 @@ If calibration is absent, the same framework can be interpreted in pixel/bin uni
 
 ## 7. Masks, shear selection, and map estimation
 
-Map mode optionally limits seed locations using a shear mask:
+Map mode separates seed selection from target gating:
 
-- `build_shear_mask_patchvec(..., shear_mask_px, shear_pctl, thresh_patch)`
-- If no pixel mask is provided, a percentile threshold on median frame intensity generates it.
+- target gate (`target_gate_vec`):
+  - from `shear_mask_px` when `use_shear_mask=True`
+  - otherwise all bins are eligible as correlation targets
+- seed gate (`seed_gate_vec`):
+  - from `seed_mask_px` when provided
+  - otherwise defaults to `target_gate_vec`
 
-This affects which seeds are solved (`seeds = np.flatnonzero(shear)`), not the correlation definition itself.
+Both are built via `build_shear_mask_patchvec(...)` and used as:
+
+- solved seeds: `seeds = np.flatnonzero(seed_gate_vec)`
+- candidate targets per seed: start from `target_gate_vec` and apply per-lag gating
+
+This lets users mask where vectors are estimated without forcing the same mask
+on candidate target bins.
 
 ## 8. Padding and edge handling
 
