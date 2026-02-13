@@ -254,6 +254,73 @@ The same summaries are available for `uy` and speed magnitude `um`.
 You can also provide `progress_callback(done, total)` to receive one update per bootstrap replicate.
 When `show_progress=True`, WCV first tries a `tqdm` bar; if notebook widget rendering fails (for example `Error displaying widget: model not found`) or `tqdm` is unavailable, it falls back to a plain text `Bootstrap i/N` counter.
 
+## Interpreting parameter-ensemble uncertainty outputs
+
+`run_parameter_ensemble_uncertainty` reruns the estimator many times while perturbing key knobs
+(`rmin`, `min_used`, `weight_power`, and `edge_clip_reject_k`) across user-defined ranges.
+Each grid cell then gets statistics over that run stack.
+
+### What `coverage` means
+
+- WCV defines `coverage_map` as the fraction of ensemble runs where **both** `ux` and `uy`
+  are finite at that cell.
+- Mathematically: `coverage = mean(isfinite(ux_runs) & isfinite(uy_runs), axis=run)`.
+- So:
+  - `coverage = 1.0` means every sampled parameter set produced a valid vector there.
+  - `coverage = 0.5` means only half of the parameter settings produced a valid vector.
+  - `coverage = 0.0` means no valid vector from any run.
+
+WCV then builds a `valid_mask` with `coverage >= min_valid_fraction`. Summary fields are masked
+to `NaN` outside that reliability region.
+
+### `ux_std` vs `sigma_param_ux`
+
+In parameter-ensemble mode these are the same quantity:
+
+- `ux_std` is `result.ux.std` (std-dev across parameter runs).
+- `sigma_param_ux` is set directly to that same array (`sigma_param_ux = ux_stats.std`).
+
+The duplicate naming exists so parameter uncertainty (`sigma_param_*`) can be combined with
+bootstrap uncertainty (`sigma_boot_*`) when a bootstrap result is supplied.
+
+### Undergrad-level interpretation of this uncertainty
+
+Think of this as a **sensitivity test to tuning choices**:
+
+- You did not change the movie; you changed plausible processing parameters.
+- If velocity at a cell barely changes across those choices, parameter uncertainty is low.
+- If it swings a lot, that velocity estimate is fragile to parameter tuning.
+
+So this uncertainty tells you, cell-by-cell, **"How much does my answer depend on reasonable
+analysis settings?"** It does **not** by itself capture all uncertainty sources (e.g., camera
+noise, model mismatch, or temporal sampling variability unless you also add bootstrap).
+
+### Two-stage uncertainty (bootstrap + parameter ensemble)
+
+When `bootstrap_result` is provided to `run_parameter_ensemble_uncertainty`, WCV reports three
+related maps for each component:
+
+- `sigma_param`: spread across the parameter-ensemble runs (analysis-choice sensitivity).
+- `sigma_boot`: spread from block bootstrap replicates (finite-data temporal resampling).
+- `sigma_total`: a combined uncertainty computed as
+  `sqrt(sigma_param**2 + sigma_boot**2)`.
+
+In practice, this gives a useful decomposition: where `sigma_param` dominates, your estimate is
+most sensitive to tuning choices; where `sigma_boot` dominates, your estimate is mostly limited by
+finite noisy data.
+
+### What these uncertainty maps are **not**
+
+These are **precision/sensitivity** metrics, not direct **accuracy** metrics relative to the true
+convection velocity. A small `sigma_param`, `sigma_boot`, or `sigma_total` means the estimate is
+internally stable under the tested perturbations; it does **not** prove the estimate is close to a
+physical ground truth.
+
+In particular, these maps do not by themselves quantify systematic bias from sources such as model
+mismatch, calibration error, optical distortion, tracer non-ideal behavior, or out-of-plane motion.
+Absolute-accuracy claims still require external validation (for example synthetic-truth tests,
+benchmark flows, or independent diagnostics).
+
 ## Building docs locally
 
 ```bash
