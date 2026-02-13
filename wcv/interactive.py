@@ -182,7 +182,7 @@ def make_plif_interactive_widget() -> None:
     shift = widgets.IntSlider(value=1, min=1, max=20, step=1, description="shift")
     rmin = widgets.FloatSlider(value=0.2, min=0.0, max=0.95, step=0.01, description="rmin")
     weight_power = widgets.FloatSlider(value=2.0, min=0.5, max=5.0, step=0.5, description="weight")
-    edge_clip_k = widgets.FloatSlider(value=1.0, min=0.0, max=4.0, step=0.1, description="edge k")
+    edge_clip_k = widgets.FloatSlider(value=1.0, min=0.0, max=4.0, step=0.1, description="edge k (d<k*r)")
     vlim = widgets.FloatSlider(value=0.5, min=0.05, max=1.0, step=0.05, description="|corr| lim")
     view_mode = widgets.ToggleButtons(options=["2D", "3D"], value="2D", description="view")
 
@@ -313,7 +313,8 @@ def make_plif_interactive_widget() -> None:
             status.value = (
                 f"<b>Seed:</b> ({state['px']:.3f}, {state['py']:.3f}) | "
                 f"bin_px={bin_px_val} | used bins={result.n_used_by_shift[int(shift.value)]} | "
-                f"edge clipped={edge_clipped} (d={edge_distance:.2f}, r={support_radius:.2f}) | "
+                f"edge clipped={edge_clipped} [check: d < k*r] "
+                f"(d={edge_distance:.2f}, r={support_radius:.2f}, k={float(edge_clip_k.value):.2f}) | "
                 f"Ux={result.ux:.3f} m/s, Uy={result.uy:.3f} m/s"
             )
             fig.canvas.draw_idle()
@@ -386,7 +387,7 @@ def launch_plif_interactive_gui() -> None:
     s_rmin = Slider(ax_rmin, "rmin", 0.0, 0.95, valinit=0.2, valstep=0.01)
     s_weight = Slider(ax_weight, "weight", 0.5, 5.0, valinit=2.0, valstep=0.5)
     s_vlim = Slider(ax_vlim, "|corr| lim", 0.05, 1.0, valinit=0.5, valstep=0.05)
-    s_edge_k = Slider(ax_edge_k, "edge k", 0.0, 4.0, valinit=1.0, valstep=0.1)
+    s_edge_k = Slider(ax_edge_k, "edge k (d<k*r)", 0.0, 4.0, valinit=1.0, valstep=0.1)
     mode = RadioButtons(ax_mode, ("2D", "3D"), active=0)
 
     status_txt = fig.text(0.05, 0.01, "Click the mean image to choose a seed.", fontsize=10)
@@ -486,7 +487,8 @@ def launch_plif_interactive_gui() -> None:
             status_txt.set_text(
                 f"Seed=({state['px']:.3f}, {state['py']:.3f}) | bin_px={bin_px_val} | "
                 f"used bins={result.n_used_by_shift[int(s_shift.val)]} | edge clipped={edge_clipped} "
-                f"(d={edge_distance:.2f}, r={support_radius:.2f}) | Ux={result.ux:.3f} m/s, Uy={result.uy:.3f} m/s"
+                f"[check: d < k*r] (d={edge_distance:.2f}, r={support_radius:.2f}, k={float(s_edge_k.val):.2f}) | "
+                f"Ux={result.ux:.3f} m/s, Uy={result.uy:.3f} m/s"
             )
             fig.canvas.draw_idle()
         except Exception as exc:  # pragma: no cover

@@ -184,6 +184,15 @@ make_plif_interactive_widget()
 The GUI/notebook controls expose common estimator parameters (`PATCH_PX`, stride, shift, `rmin`, weight power,
 color limits), and clicking the mean image updates the selected seed and resulting correlation map.
 
+Edge-clipping control (`edge k`) uses:
+
+- `edge_distance` (`d`): distance in correlation-grid bins from the weighted centroid of accepted bins to the nearest frame edge
+- `support_radius` (`r`): weighted support radius in bins (from second moments)
+- clipping condition: `d < k * r`
+
+So `edge k = 1` means the lag is flagged/rejected when the centroid is within one support radius of the border (`d < r`).
+
+
 ## Package layout
 
 - `wcv/preprocess.py`: detrending, z-scoring, common-mode regression, block means.
