@@ -46,16 +46,58 @@ class _StageProgress:
             self._on_progress(self.total, self.total, self.stage)
 
 
+def _edge_clip_diagnostic(
+    *,
+    mask: np.ndarray,
+    weights: np.ndarray,
+    row_coords: np.ndarray,
+    col_coords: np.ndarray,
+    by: int,
+    bx: int,
+    options: EstimationOptions,
+) -> tuple[bool, float, float]:
+    if options.edge_clip_reject_k is None:
+        return False, np.nan, np.nan
+    if mask.ndim != 1 or mask.size != row_coords.size:
+        return False, np.nan, np.nan
+
+    idx = np.flatnonzero(mask)
+    if idx.size == 0 or weights.size != idx.size:
+        return False, np.nan, np.nan
+
+    wsum = float(weights.sum())
+    if wsum <= 0 or not np.isfinite(wsum):
+        return False, np.nan, np.nan
+
+    r = row_coords[idx]
+    c = col_coords[idx]
+    r_bar = float(np.sum(weights * r) / wsum)
+    c_bar = float(np.sum(weights * c) / wsum)
+
+    var_r = float(np.sum(weights * (r - r_bar) ** 2) / wsum)
+    var_c = float(np.sum(weights * (c - c_bar) ** 2) / wsum)
+    support_radius = float(options.edge_clip_sigma_mult) * float(np.sqrt(max(var_r + var_c, 0.0)))
+
+    edge_distance = float(min(r_bar, c_bar, (by - 1) - r_bar, (bx - 1) - c_bar))
+    clipped = bool(edge_distance < float(options.edge_clip_reject_k) * support_radius)
+    return clipped, edge_distance, support_radius
+
+
 def _fit_seed_from_corr_vectors(
     *,
     seed_idx: int,
     target_gate_vec: np.ndarray,
     x_m: np.ndarray,
     y_m: np.ndarray,
+    row_coords: np.ndarray,
+    col_coords: np.ndarray,
+    by: int,
+    bx: int,
     shifts: tuple[int, ...],
     fs: float,
     options: EstimationOptions,
     corr_for_shift: Callable[[int], np.ndarray],
+    edge_clipped_by_shift: dict[int, bool] | None = None,
 ) -> tuple[float, float, int]:
     dx_all = x_m - x_m[seed_idx]
     dy_all = y_m - y_m[seed_idx]
@@ -81,6 +123,20 @@ def _fit_seed_from_corr_vectors(
         if wsum <= 0 or not np.isfinite(wsum):
             continue
 
+        edge_clipped, _, _ = _edge_clip_diagnostic(
+            mask=m,
+            weights=w,
+            row_coords=row_coords,
+            col_coords=col_coords,
+            by=by,
+            bx=bx,
+            options=options,
+        )
+        if edge_clipped_by_shift is not None:
+            edge_clipped_by_shift[int(s)] = edge_clipped
+        if edge_clipped:
+            continue
+
         taus.append(s / float(fs))
         dxs.append(float(np.sum(w * dx_all[m]) / wsum))
         dys.append(float(np.sum(w * dy_all[m]) / wsum))
@@ -104,10 +160,15 @@ def _fit_seed_from_sparse_vectors(
     seed_idx: int,
     x_m: np.ndarray,
     y_m: np.ndarray,
+    row_coords: np.ndarray,
+    col_coords: np.ndarray,
+    by: int,
+    bx: int,
     shifts: tuple[int, ...],
     fs: float,
     options: EstimationOptions,
     sparse_corr_for_shift: Callable[[int], tuple[np.ndarray, np.ndarray]],
+    edge_clipped_by_shift: dict[int, bool] | None = None,
 ) -> tuple[float, float, int]:
     dx_all = x_m - x_m[seed_idx]
     dy_all = y_m - y_m[seed_idx]
@@ -130,6 +191,22 @@ def _fit_seed_from_sparse_vectors(
         w = (vals.astype(np.float64) ** options.weight_power)
         wsum = w.sum()
         if wsum <= 0 or not np.isfinite(wsum):
+            continue
+
+        full_mask = np.zeros_like(dx_all, dtype=bool)
+        full_mask[idx] = True
+        edge_clipped, _, _ = _edge_clip_diagnostic(
+            mask=full_mask,
+            weights=w,
+            row_coords=row_coords,
+            col_coords=col_coords,
+            by=by,
+            bx=bx,
+            options=options,
+        )
+        if edge_clipped_by_shift is not None:
+            edge_clipped_by_shift[int(s)] = edge_clipped
+        if edge_clipped:
             continue
 
         taus.append(s / float(fs))
@@ -306,6 +383,8 @@ def estimate_velocity_map_streaming(
         raise ValueError("shifts must include at least one positive integer")
 
     n_regions = by * bx
+    row_coords = np.repeat(np.arange(by, dtype=np.float64), bx)
+    col_coords = np.tile(np.arange(bx, dtype=np.float64), by)
     ux = np.full(n_regions, np.nan, dtype=np.float32)
     uy = np.full(n_regions, np.nan, dtype=np.float32)
     used_count = np.zeros(n_regions, dtype=np.int32)
@@ -315,6 +394,7 @@ def estimate_velocity_map_streaming(
         if store_corr_by_shift
         else {}
     )
+    edge_clipped_by_shift = {s: np.zeros(n_regions, dtype=bool) for s in shifts} if options.edge_clip_reject_k is not None else None
 
     shift_stats: dict[int, dict[str, np.ndarray | float]] = {}
     for s in shifts:
@@ -351,6 +431,7 @@ def estimate_velocity_map_streaming(
     if not use_seed_blocks and shift_chunk == len(shifts):
         for j in seeds:
             corr_cache: dict[int, np.ndarray] = {}
+            seed_edge_diag: dict[int, bool] = {}
 
             def _corr_for_shift(s: int) -> np.ndarray:
                 r = corr_cache.get(s)
@@ -379,12 +460,20 @@ def estimate_velocity_map_streaming(
                 target_gate_vec=target_gate_vec,
                 x_m=x_m,
                 y_m=y_m,
+                row_coords=row_coords,
+                col_coords=col_coords,
+                by=by,
+                bx=bx,
                 shifts=shifts,
                 fs=fs,
                 options=options,
                 corr_for_shift=_corr_for_shift,
+                edge_clipped_by_shift=seed_edge_diag if edge_clipped_by_shift is not None else None,
             )
             used_count[j] = n_any
+            if edge_clipped_by_shift is not None:
+                for s in shifts:
+                    edge_clipped_by_shift[s][j] = bool(seed_edge_diag.get(int(s), False))
             ux[j] = ux_j
             uy[j] = uy_j
             if np.isfinite(ux_j) and np.isfinite(uy_j):
@@ -448,6 +537,20 @@ def estimate_velocity_map_streaming(
                         if wsum <= 0 or not np.isfinite(wsum):
                             continue
 
+                        edge_clipped, _, _ = _edge_clip_diagnostic(
+                            mask=m,
+                            weights=weights,
+                            row_coords=row_coords,
+                            col_coords=col_coords,
+                            by=by,
+                            bx=bx,
+                            options=options,
+                        )
+                        if edge_clipped_by_shift is not None:
+                            edge_clipped_by_shift[s][seed_chunk[k]] = edge_clipped
+                        if edge_clipped:
+                            continue
+
                         dxs = float(np.sum(weights * dx_block[k, m]) / wsum)
                         dys = float(np.sum(weights * dy_block[k, m]) / wsum)
                         numer_x[k] += tau * dxs
@@ -487,6 +590,7 @@ def estimate_velocity_map_streaming(
         padded=padded,
         original_shape=original_shape,
         padded_shape=padded_shape,
+        edge_clipped_by_shift=edge_clipped_by_shift,
     )
 
 
@@ -640,9 +744,12 @@ def estimate_velocity_map(
         raise ValueError("sparse_top_k must be > 0 when provided")
 
     n_regions = by * bx
+    row_coords = np.repeat(np.arange(by, dtype=np.float64), bx)
+    col_coords = np.tile(np.arange(bx, dtype=np.float64), by)
     ux = np.full(n_regions, np.nan, dtype=np.float32)
     uy = np.full(n_regions, np.nan, dtype=np.float32)
     used_count = np.zeros(n_regions, dtype=np.int32)
+    edge_clipped_by_shift = {s: np.zeros(n_regions, dtype=bool) for s in shifts} if options.edge_clip_reject_k is not None else None
 
     seeds = np.flatnonzero(seed_gate_vec)
     seed_progress = stage_progress("seed loop progress", int(seeds.size)) if stage_progress is not None else None
@@ -659,17 +766,26 @@ def estimate_velocity_map(
             shift_progress.close()
 
         for j in seeds:
+            seed_edge_diag: dict[int, bool] = {}
             ux_j, uy_j, n_any = _fit_seed_from_corr_vectors(
                 seed_idx=int(j),
                 target_gate_vec=target_gate_vec,
                 x_m=x_m,
                 y_m=y_m,
+                row_coords=row_coords,
+                col_coords=col_coords,
+                by=by,
+                bx=bx,
                 shifts=shifts,
                 fs=fs,
                 options=options,
                 corr_for_shift=lambda s, _j=int(j): np.asarray(corr_by_shift[s])[:, _j],
+                edge_clipped_by_shift=seed_edge_diag if edge_clipped_by_shift is not None else None,
             )
             used_count[j] = n_any
+            if edge_clipped_by_shift is not None:
+                for s in shifts:
+                    edge_clipped_by_shift[s][j] = bool(seed_edge_diag.get(int(s), False))
             ux[j] = ux_j
             uy[j] = uy_j
             if np.isfinite(ux_j) and np.isfinite(uy_j):
@@ -725,16 +841,25 @@ def estimate_velocity_map(
                 )
                 corr_by_shift[s][int(j)] = sparse_cache[s]
 
+            seed_edge_diag: dict[int, bool] = {}
             ux_j, uy_j, n_any = _fit_seed_from_sparse_vectors(
                 seed_idx=int(j),
                 x_m=x_m,
                 y_m=y_m,
+                row_coords=row_coords,
+                col_coords=col_coords,
+                by=by,
+                bx=bx,
                 shifts=shifts,
                 fs=fs,
                 options=options,
                 sparse_corr_for_shift=lambda s: sparse_cache[s],
+                edge_clipped_by_shift=seed_edge_diag if edge_clipped_by_shift is not None else None,
             )
             used_count[j] = n_any
+            if edge_clipped_by_shift is not None:
+                for s in shifts:
+                    edge_clipped_by_shift[s][j] = bool(seed_edge_diag.get(int(s), False))
             ux[j] = ux_j
             uy[j] = uy_j
             if np.isfinite(ux_j) and np.isfinite(uy_j):
@@ -760,4 +885,5 @@ def estimate_velocity_map(
         padded=padded,
         original_shape=original_shape,
         padded_shape=padded_shape,
+        edge_clipped_by_shift=edge_clipped_by_shift,
     )

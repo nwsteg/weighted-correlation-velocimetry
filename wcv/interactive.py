@@ -85,6 +85,7 @@ def _compute_corr_result(
     shift: int,
     rmin: float,
     weight_power: float,
+    edge_clip_k: float,
 ):
     grid = GridSpec(patch_px=int(patch_px), grid_stride_patches=int(stride))
     bin_px = grid.bin_px
@@ -106,12 +107,16 @@ def _compute_corr_result(
             min_used=3,
             require_downstream=False,
             require_dy_positive=False,
+            edge_clip_reject_k=float(edge_clip_k),
         ),
         allow_bin_padding=True,
     )
     corr_vec = np.asarray(result.corr_by_shift[int(shift)], dtype=float)
     corr_grid = corr_vec.reshape(result.by, result.bx)
-    return result, seed_box, corr_grid, bin_px
+    edge_clipped = bool((result.edge_clipped_by_shift or {}).get(int(shift), False))
+    edge_distance = float((result.edge_distance_by_shift or {}).get(int(shift), np.nan))
+    support_radius = float((result.support_radius_by_shift or {}).get(int(shift), np.nan))
+    return result, seed_box, corr_grid, bin_px, edge_clipped, edge_distance, support_radius
 
 
 def make_plif_interactive_widget() -> None:
@@ -133,6 +138,7 @@ def make_plif_interactive_widget() -> None:
     shift = widgets.IntSlider(value=1, min=1, max=20, step=1, description="shift")
     rmin = widgets.FloatSlider(value=0.2, min=0.0, max=0.95, step=0.01, description="rmin")
     weight_power = widgets.FloatSlider(value=2.0, min=0.5, max=5.0, step=0.5, description="weight")
+    edge_clip_k = widgets.FloatSlider(value=1.0, min=0.0, max=4.0, step=0.1, description="edge k")
     vlim = widgets.FloatSlider(value=0.5, min=0.05, max=1.0, step=0.05, description="|corr| lim")
     view_mode = widgets.ToggleButtons(options=["2D", "3D"], value="2D", description="view")
 
@@ -206,7 +212,7 @@ def make_plif_interactive_widget() -> None:
         if state["px"] is None or state["py"] is None:
             return
         try:
-            result, seed_box, corr_grid, bin_px_val = _compute_corr_result(
+            result, seed_box, corr_grid, bin_px_val, edge_clipped, edge_distance, support_radius = _compute_corr_result(
                 movie,
                 extent_xd_yd,
                 dj_mm,
@@ -220,6 +226,7 @@ def make_plif_interactive_widget() -> None:
                 int(shift.value),
                 float(rmin.value),
                 float(weight_power.value),
+                float(edge_clip_k.value),
             )
             _render(corr_grid, bin_px_val)
 
@@ -234,6 +241,7 @@ def make_plif_interactive_widget() -> None:
             status.value = (
                 f"<b>Seed:</b> ({state['px']:.3f}, {state['py']:.3f}) | "
                 f"bin_px={bin_px_val} | used bins={result.n_used_by_shift[int(shift.value)]} | "
+                f"edge clipped={edge_clipped} (d={edge_distance:.2f}, r={support_radius:.2f}) | "
                 f"Ux={result.ux:.3f} m/s, Uy={result.uy:.3f} m/s"
             )
             fig.canvas.draw_idle()
@@ -250,10 +258,10 @@ def make_plif_interactive_widget() -> None:
         _update()
 
     fig.canvas.mpl_connect("button_press_event", _on_click)
-    for w in (patch_px, stride, shift, rmin, weight_power, vlim, view_mode):
+    for w in (patch_px, stride, shift, rmin, weight_power, edge_clip_k, vlim, view_mode):
         w.observe(_update, names="value")
 
-    controls = widgets.VBox([widgets.HBox([patch_px, stride, shift]), widgets.HBox([rmin, weight_power, vlim, view_mode]), status])
+    controls = widgets.VBox([widgets.HBox([patch_px, stride, shift]), widgets.HBox([rmin, weight_power, edge_clip_k, vlim, view_mode]), status])
     display(controls)
     display(fig)
 
@@ -294,6 +302,7 @@ def launch_plif_interactive_gui() -> None:
     ax_shift = fig.add_axes([0.08, 0.06, 0.30, 0.03])
     ax_rmin = fig.add_axes([0.56, 0.14, 0.30, 0.03])
     ax_weight = fig.add_axes([0.56, 0.10, 0.30, 0.03])
+    ax_edge_k = fig.add_axes([0.56, 0.02, 0.30, 0.03])
     ax_vlim = fig.add_axes([0.56, 0.06, 0.30, 0.03])
     ax_mode = fig.add_axes([0.40, 0.04, 0.12, 0.12])
 
@@ -303,6 +312,7 @@ def launch_plif_interactive_gui() -> None:
     s_rmin = Slider(ax_rmin, "rmin", 0.0, 0.95, valinit=0.2, valstep=0.01)
     s_weight = Slider(ax_weight, "weight", 0.5, 5.0, valinit=2.0, valstep=0.5)
     s_vlim = Slider(ax_vlim, "|corr| lim", 0.05, 1.0, valinit=0.5, valstep=0.05)
+    s_edge_k = Slider(ax_edge_k, "edge k", 0.0, 4.0, valinit=1.0, valstep=0.1)
     mode = RadioButtons(ax_mode, ("2D", "3D"), active=0)
 
     status_txt = fig.text(0.05, 0.01, "Click the mean image to choose a seed.", fontsize=10)
@@ -347,7 +357,7 @@ def launch_plif_interactive_gui() -> None:
         if state["px"] is None or state["py"] is None:
             return
         try:
-            result, seed_box, corr_grid, bin_px_val = _compute_corr_result(
+            result, seed_box, corr_grid, bin_px_val, edge_clipped, edge_distance, support_radius = _compute_corr_result(
                 movie,
                 extent_xd_yd,
                 dj_mm,
@@ -361,6 +371,7 @@ def launch_plif_interactive_gui() -> None:
                 int(s_shift.val),
                 float(s_rmin.val),
                 float(s_weight.val),
+                float(s_edge_k.val),
             )
             _render(corr_grid, bin_px_val)
 
@@ -374,7 +385,8 @@ def launch_plif_interactive_gui() -> None:
 
             status_txt.set_text(
                 f"Seed=({state['px']:.3f}, {state['py']:.3f}) | bin_px={bin_px_val} | "
-                f"used bins={result.n_used_by_shift[int(s_shift.val)]} | Ux={result.ux:.3f} m/s, Uy={result.uy:.3f} m/s"
+                f"used bins={result.n_used_by_shift[int(s_shift.val)]} | edge clipped={edge_clipped} "
+                f"(d={edge_distance:.2f}, r={support_radius:.2f}) | Ux={result.ux:.3f} m/s, Uy={result.uy:.3f} m/s"
             )
             fig.canvas.draw_idle()
         except Exception as exc:  # pragma: no cover
@@ -391,7 +403,7 @@ def launch_plif_interactive_gui() -> None:
         _update()
 
     fig.canvas.mpl_connect("button_press_event", _on_click)
-    for s in (s_patch, s_stride, s_shift, s_rmin, s_weight, s_vlim):
+    for s in (s_patch, s_stride, s_shift, s_rmin, s_weight, s_edge_k, s_vlim):
         s.on_changed(_update)
     mode.on_clicked(_update)
 

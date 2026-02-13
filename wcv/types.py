@@ -43,6 +43,8 @@ class EstimationOptions:
     padding_mode: str = "edge"
     sparse_corr_storage: bool = False
     sparse_top_k: int | None = None
+    edge_clip_reject_k: float | None = None
+    edge_clip_sigma_mult: float = 2.0
 
 
 @dataclass
@@ -63,6 +65,9 @@ class SingleSeedResult:
     padded: bool = False
     original_shape: tuple[int, int] | None = None
     padded_shape: tuple[int, int] | None = None
+    edge_clipped_by_shift: Dict[int, bool] | None = None
+    edge_distance_by_shift: Dict[int, float] | None = None
+    support_radius_by_shift: Dict[int, float] | None = None
 
 
 @dataclass
@@ -81,3 +86,4 @@ class VelocityMapResult:
     padded: bool = False
     original_shape: tuple[int, int] | None = None
     padded_shape: tuple[int, int] | None = None
+    edge_clipped_by_shift: Dict[int, np.ndarray] | None = None

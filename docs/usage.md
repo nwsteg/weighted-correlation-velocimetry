@@ -31,6 +31,7 @@ Returns `SingleSeedResult` with:
 
 - velocities: `ux`, `uy` (m/s)
 - diagnostics by lag: `corr_by_shift`, `mask_by_shift`, `dx_bar_by_shift`, `dy_bar_by_shift`, `n_used_by_shift`
+- edge-clip diagnostics by lag: `edge_clipped_by_shift`, `edge_distance_by_shift`, `support_radius_by_shift`
 - grid shape: `by`, `bx`
 - padding metadata: `padded`, `original_shape`, `padded_shape`
 
@@ -43,6 +44,18 @@ Returns `VelocityMapResult` with:
 - target gating mask (used for candidate correlations): `shear_mask_vec`
 - center coordinates: `x_m`, `y_m`
 - padding metadata: `padded`, `original_shape`, `padded_shape`
+- optional edge-clip diagnostics map by lag: `edge_clipped_by_shift`
+
+### Edge-clip quality filter
+
+`EstimationOptions` now supports an optional centroid-support clipping guard:
+
+- `edge_clip_reject_k`: disabled when `None`; when set, rejects a lag fit if
+  `edge_distance < edge_clip_reject_k * support_radius`.
+- `edge_clip_sigma_mult`: multiplier used to convert weighted spread to
+  `support_radius` (default `2.0`, i.e., ~2σ).
+
+This filter is applied per seed and per shift before velocity fitting.
 
 
 ### Seed mask vs target mask
