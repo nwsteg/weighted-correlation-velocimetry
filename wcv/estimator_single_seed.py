@@ -14,6 +14,38 @@ from .preprocess import (
 )
 from .types import EstimationOptions, GridSpec, SingleSeedResult
 
+def _edge_clip_diagnostic(
+    *,
+    mask: np.ndarray,
+    weights: np.ndarray,
+    by: int,
+    bx: int,
+    sigma_mult: float,
+    reject_k: float | None,
+) -> tuple[bool, float, float]:
+    if reject_k is None:
+        return False, np.nan, np.nan
+    if mask.size != by * bx:
+        return False, np.nan, np.nan
+
+    idx = np.flatnonzero(mask)
+    if idx.size == 0 or weights.size != idx.size:
+        return False, np.nan, np.nan
+
+    wsum = float(weights.sum())
+    if wsum <= 0 or not np.isfinite(wsum):
+        return False, np.nan, np.nan
+
+    rows = (idx // bx).astype(np.float64)
+    cols = (idx % bx).astype(np.float64)
+    r_bar = float(np.sum(weights * rows) / wsum)
+    c_bar = float(np.sum(weights * cols) / wsum)
+    var_r = float(np.sum(weights * (rows - r_bar) ** 2) / wsum)
+    var_c = float(np.sum(weights * (cols - c_bar) ** 2) / wsum)
+    support_radius = float(sigma_mult) * float(np.sqrt(max(var_r + var_c, 0.0)))
+    edge_distance = float(min(r_bar, c_bar, (by - 1) - r_bar, (bx - 1) - c_bar))
+    return bool(edge_distance < float(reject_k) * support_radius), edge_distance, support_radius
+
 
 def estimate_single_seed_velocity(
     movie: np.ndarray,
@@ -102,6 +134,9 @@ def estimate_single_seed_velocity(
     dx_bar_by_shift: dict[int, float] = {}
     dy_bar_by_shift: dict[int, float] = {}
     n_used_by_shift: dict[int, int] = {}
+    edge_clipped_by_shift: dict[int, bool] = {}
+    edge_distance_by_shift: dict[int, float] = {}
+    support_radius_by_shift: dict[int, float] = {}
 
     for s in shifts:
         r = shifted_corr_regions(region_res, seed_res, s)
@@ -112,6 +147,9 @@ def estimate_single_seed_velocity(
             dx_bar_by_shift[s] = np.nan
             dy_bar_by_shift[s] = np.nan
             n_used_by_shift[s] = 0
+            edge_clipped_by_shift[s] = False
+            edge_distance_by_shift[s] = np.nan
+            support_radius_by_shift[s] = np.nan
             continue
 
         mask = np.isfinite(r)
@@ -127,11 +165,33 @@ def estimate_single_seed_velocity(
         if n_used_by_shift[s] < options.min_used:
             dx_bar_by_shift[s] = np.nan
             dy_bar_by_shift[s] = np.nan
+            edge_clipped_by_shift[s] = False
+            edge_distance_by_shift[s] = np.nan
+            support_radius_by_shift[s] = np.nan
             continue
 
         w = (np.abs(r[mask]) ** options.weight_power).astype(np.float64)
         wsum = w.sum()
         if not np.isfinite(wsum) or wsum <= 0:
+            dx_bar_by_shift[s] = np.nan
+            dy_bar_by_shift[s] = np.nan
+            edge_clipped_by_shift[s] = False
+            edge_distance_by_shift[s] = np.nan
+            support_radius_by_shift[s] = np.nan
+            continue
+
+        edge_clipped, edge_distance, support_radius = _edge_clip_diagnostic(
+            mask=mask,
+            weights=w,
+            by=by,
+            bx=bx,
+            sigma_mult=options.edge_clip_sigma_mult,
+            reject_k=options.edge_clip_reject_k,
+        )
+        edge_clipped_by_shift[s] = edge_clipped
+        edge_distance_by_shift[s] = edge_distance
+        support_radius_by_shift[s] = support_radius
+        if edge_clipped:
             dx_bar_by_shift[s] = np.nan
             dy_bar_by_shift[s] = np.nan
             continue
@@ -174,4 +234,7 @@ def estimate_single_seed_velocity(
         padded=padded,
         original_shape=original_shape,
         padded_shape=padded_shape,
+        edge_clipped_by_shift=edge_clipped_by_shift,
+        edge_distance_by_shift=edge_distance_by_shift,
+        support_radius_by_shift=support_radius_by_shift,
     )
