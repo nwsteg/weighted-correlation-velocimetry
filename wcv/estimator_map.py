@@ -49,7 +49,7 @@ class _StageProgress:
 def _fit_seed_from_corr_vectors(
     *,
     seed_idx: int,
-    shear: np.ndarray,
+    target_gate_vec: np.ndarray,
     x_m: np.ndarray,
     y_m: np.ndarray,
     shifts: tuple[int, ...],
@@ -60,7 +60,7 @@ def _fit_seed_from_corr_vectors(
     dx_all = x_m - x_m[seed_idx]
     dy_all = y_m - y_m[seed_idx]
 
-    gate = shear.copy()
+    gate = target_gate_vec.copy()
     gate[seed_idx] = False
     if options.require_downstream:
         gate &= dx_all > 0
@@ -225,6 +225,7 @@ def estimate_velocity_map_streaming(
     allow_bin_padding: bool = False,
     use_shear_mask: bool = True,
     shear_mask_px: np.ndarray | None = None,
+    seed_mask_px: np.ndarray | None = None,
     shear_pctl: float = 50,
     origin: str = "upper",
     detrend_type: str = "linear",
@@ -280,11 +281,18 @@ def estimate_velocity_map_streaming(
         preprocess.advance()
 
     if use_shear_mask:
-        shear = build_shear_mask_patchvec(
+        target_gate_vec = build_shear_mask_patchvec(
             f, by=by, bx=bx, bin_px=bin_px, shear_mask_px=shear_mask_px, shear_pctl=shear_pctl
         )
     else:
-        shear = np.ones(by * bx, dtype=bool)
+        target_gate_vec = np.ones(by * bx, dtype=bool)
+
+    if seed_mask_px is not None:
+        seed_gate_vec = build_shear_mask_patchvec(
+            f, by=by, bx=bx, bin_px=bin_px, shear_mask_px=seed_mask_px, shear_pctl=shear_pctl
+        )
+    else:
+        seed_gate_vec = target_gate_vec
     if preprocess is not None:
         preprocess.advance()
 
@@ -323,7 +331,7 @@ def estimate_velocity_map_streaming(
             "norm_denom": float(n1 - 1),
         }
 
-    seeds = np.flatnonzero(shear)
+    seeds = np.flatnonzero(seed_gate_vec)
     chunk_size = 1 if seed_chunk_size is None else max(1, int(seed_chunk_size))
     shift_chunk = len(shifts) if shift_chunk_size is None else max(1, int(shift_chunk_size))
     shift_chunk = min(shift_chunk, len(shifts))
@@ -368,7 +376,7 @@ def estimate_velocity_map_streaming(
 
             ux_j, uy_j, n_any = _fit_seed_from_corr_vectors(
                 seed_idx=int(j),
-                shear=shear,
+                target_gate_vec=target_gate_vec,
                 x_m=x_m,
                 y_m=y_m,
                 shifts=shifts,
@@ -394,7 +402,7 @@ def estimate_velocity_map_streaming(
 
             dx_block = x_m[None, :] - x_m[seed_chunk][:, None]
             dy_block = y_m[None, :] - y_m[seed_chunk][:, None]
-            gate_block = np.broadcast_to(shear[None, :], (seed_chunk.size, n_regions)).copy()
+            gate_block = np.broadcast_to(target_gate_vec[None, :], (seed_chunk.size, n_regions)).copy()
             gate_block[np.arange(seed_chunk.size), seed_chunk] = False
             if options.require_downstream:
                 gate_block &= dx_block > 0
@@ -468,7 +476,7 @@ def estimate_velocity_map_streaming(
         ux_map=ux.reshape(by, bx),
         uy_map=uy.reshape(by, bx),
         used_count_map=used_count.reshape(by, bx),
-        shear_mask_vec=shear,
+        shear_mask_vec=target_gate_vec,
         x_m=x_m,
         y_m=y_m,
         by=by,
@@ -494,6 +502,7 @@ def estimate_velocity_map_hybrid(
     allow_bin_padding: bool = False,
     use_shear_mask: bool = True,
     shear_mask_px: np.ndarray | None = None,
+    seed_mask_px: np.ndarray | None = None,
     shear_pctl: float = 50,
     origin: str = "upper",
     detrend_type: str = "linear",
@@ -518,6 +527,7 @@ def estimate_velocity_map_hybrid(
         allow_bin_padding=allow_bin_padding,
         use_shear_mask=use_shear_mask,
         shear_mask_px=shear_mask_px,
+        seed_mask_px=seed_mask_px,
         shear_pctl=shear_pctl,
         origin=origin,
         detrend_type=detrend_type,
@@ -542,6 +552,7 @@ def estimate_velocity_map(
     allow_bin_padding: bool = False,
     use_shear_mask: bool = True,
     shear_mask_px: np.ndarray | None = None,
+    seed_mask_px: np.ndarray | None = None,
     shear_pctl: float = 50,
     origin: str = "upper",
     detrend_type: str = "linear",
@@ -597,11 +608,18 @@ def estimate_velocity_map(
         preprocess.advance()
 
     if use_shear_mask:
-        shear = build_shear_mask_patchvec(
+        target_gate_vec = build_shear_mask_patchvec(
             f, by=by, bx=bx, bin_px=bin_px, shear_mask_px=shear_mask_px, shear_pctl=shear_pctl
         )
     else:
-        shear = np.ones(by * bx, dtype=bool)
+        target_gate_vec = np.ones(by * bx, dtype=bool)
+
+    if seed_mask_px is not None:
+        seed_gate_vec = build_shear_mask_patchvec(
+            f, by=by, bx=bx, bin_px=bin_px, shear_mask_px=seed_mask_px, shear_pctl=shear_pctl
+        )
+    else:
+        seed_gate_vec = target_gate_vec
     if preprocess is not None:
         preprocess.advance()
 
@@ -626,7 +644,7 @@ def estimate_velocity_map(
     uy = np.full(n_regions, np.nan, dtype=np.float32)
     used_count = np.zeros(n_regions, dtype=np.int32)
 
-    seeds = np.flatnonzero(shear)
+    seeds = np.flatnonzero(seed_gate_vec)
     seed_progress = stage_progress("seed loop progress", int(seeds.size)) if stage_progress is not None else None
     valid = 0
 
@@ -643,7 +661,7 @@ def estimate_velocity_map(
         for j in seeds:
             ux_j, uy_j, n_any = _fit_seed_from_corr_vectors(
                 seed_idx=int(j),
-                shear=shear,
+                target_gate_vec=target_gate_vec,
                 x_m=x_m,
                 y_m=y_m,
                 shifts=shifts,
@@ -676,7 +694,7 @@ def estimate_velocity_map(
             }
 
         for j in seeds:
-            gate = shear.copy()
+            gate = target_gate_vec.copy()
             gate[int(j)] = False
             dx_all = x_m - x_m[int(j)]
             if options.require_downstream:
@@ -731,7 +749,7 @@ def estimate_velocity_map(
         ux_map=ux.reshape(by, bx),
         uy_map=uy.reshape(by, bx),
         used_count_map=used_count.reshape(by, bx),
-        shear_mask_vec=shear,
+        shear_mask_vec=target_gate_vec,
         x_m=x_m,
         y_m=y_m,
         by=by,
