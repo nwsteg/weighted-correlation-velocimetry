@@ -23,6 +23,14 @@ from .bootstrap import (
     default_block_length,
     moving_block_bootstrap_indices,
 )
+from .parameter_ensemble import (
+    ParameterEnsembleResult,
+    ParameterEnsembleStats,
+    plot_parameter_ensemble_summary,
+    run_parameter_ensemble_uncertainty,
+    sample_parameter_ensemble,
+    save_parameter_ensemble_bundle,
+)
 from .estimator_single_seed import estimate_single_seed_velocity
 from .interactive import load_hardcoded_plif, make_plif_interactive_widget
 from .legacy import draw_boxes_debug, estimate_velocity_per_shift_framework
@@ -66,4 +74,10 @@ __all__ = [
     "load_hardcoded_plif",
     "make_plif_interactive_widget",
     "launch_plif_interactive_gui",
+    "ParameterEnsembleStats",
+    "ParameterEnsembleResult",
+    "sample_parameter_ensemble",
+    "run_parameter_ensemble_uncertainty",
+    "save_parameter_ensemble_bundle",
+    "plot_parameter_ensemble_summary",
 ]
