@@ -207,6 +207,48 @@ _ = estimate_velocity_map_streaming(
 Typical `stage` values include `preprocessing`, `per-shift processing` (materialized map estimator),
 and `seed loop progress`.
 
+
+## Time-series block bootstrap uncertainty
+
+Use `bootstrap_velocity_map` to estimate uncertainty from a single temporally correlated movie.
+
+- Default resampling uses a **moving-block bootstrap** (contiguous blocks sampled with replacement, concatenated, then trimmed to `N`).
+- Default block length is `round(sqrt(N))` with a minimum of 8 frames (`default_block_length`). For `N=100..500`, this gives ~10..22 frame blocks so the lag-1 boundary fraction is about `1/L`.
+- Each replicate runs the normal estimator on `movie[idx]` (no cross-replicate fit reuse).
+
+```python
+from wcv import bootstrap_velocity_map, estimate_velocity_map_streaming
+
+bt = bootstrap_velocity_map(
+    movie=movie,
+    n_bootstrap=200,
+    seed=123,
+    estimator=estimate_velocity_map_streaming,
+    estimator_kwargs=dict(
+        fs=50_000,
+        grid=grid,
+        bg_boxes_px=bg_boxes_px,
+        extent_xd_yd=extent,
+        dj_mm=Dj,
+        shifts=(1,),
+        options=opts,
+        use_shear_mask=False,
+    ),
+    # block_length=16,      # optional override
+    # circular=True,        # optional circular block bootstrap
+    ci_percentiles=(2.5, 97.5),
+    min_valid_fraction=0.2,
+)
+
+ux_mean = bt.ux.mean
+ux_std = bt.ux.std
+ux_ci_lo = bt.ux.ci_low
+ux_ci_hi = bt.ux.ci_high
+ux_valid = bt.ux.valid_fraction
+```
+
+The same summaries are available for `uy` and speed magnitude `um`.
+
 ## Building docs locally
 
 ```bash
