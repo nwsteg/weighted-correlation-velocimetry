@@ -129,6 +129,56 @@ def test_velocity_map_streaming_matches_materialized_and_skips_corr_storage_by_d
 
 
 
+
+
+def test_velocity_map_seed_mask_controls_seed_selection_independently() -> None:
+    rng = np.random.default_rng(90)
+    movie = rng.standard_normal((24, 32, 32), dtype=np.float32)
+    grid = GridSpec(patch_px=8, grid_stride_patches=1)
+    options = EstimationOptions(min_used=1, rmin=0.0)
+
+    # 4x4 patch grid for a 32x32 frame with bin_px=8
+    seed_mask_px = np.zeros((32, 32), dtype=bool)
+    seed_mask_px[8:16, 8:16] = True
+    seed_mask_px[16:24, 8:16] = True
+
+    shear_mask_px = np.zeros((32, 32), dtype=bool)
+    shear_mask_px[8:24, 8:16] = True
+    shear_mask_px[8:24, 16:24] = True
+
+    common_kwargs = dict(
+        movie=movie,
+        fs=1000.0,
+        grid=grid,
+        bg_boxes_px=[(0, 8, 0, 8)],
+        extent_xd_yd=(0.0, 1.0, 0.0, 1.0),
+        dj_mm=1.0,
+        shifts=(1, 2),
+        options=options,
+        allow_bin_padding=False,
+        use_shear_mask=True,
+        shear_mask_px=shear_mask_px,
+        seed_mask_px=seed_mask_px,
+    )
+
+    materialized = estimate_velocity_map(**common_kwargs)
+    streaming = estimate_velocity_map_streaming(**common_kwargs)
+    hybrid = estimate_velocity_map_hybrid(**common_kwargs, seed_chunk_size=2)
+
+    np.testing.assert_allclose(streaming.ux_map, materialized.ux_map, equal_nan=True)
+    np.testing.assert_allclose(streaming.uy_map, materialized.uy_map, equal_nan=True)
+    np.testing.assert_array_equal(streaming.used_count_map, materialized.used_count_map)
+    np.testing.assert_allclose(hybrid.ux_map, materialized.ux_map, equal_nan=True)
+    np.testing.assert_allclose(hybrid.uy_map, materialized.uy_map, equal_nan=True)
+
+    assert materialized.total_seed_count == 2
+    assert streaming.total_seed_count == 2
+    assert hybrid.total_seed_count == 2
+
+    non_seed_indices = np.setdiff1d(np.arange(materialized.ux_map.size), np.array([5, 9]))
+    assert np.all(np.isnan(materialized.ux_map.ravel()[non_seed_indices]))
+    assert np.all(streaming.used_count_map.ravel()[non_seed_indices] == 0)
+
 def test_velocity_map_streaming_matches_materialized_with_gating_and_weight_options() -> None:
     rng = np.random.default_rng(21)
     movie = rng.standard_normal((30, 40, 40), dtype=np.float32)

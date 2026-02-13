@@ -40,9 +40,38 @@ Returns `VelocityMapResult` with:
 
 - maps: `ux_map`, `uy_map`
 - quality/support: `used_count_map`, `valid_seed_count`, `total_seed_count`
-- seed selection: `shear_mask_vec`
+- target gating mask (used for candidate correlations): `shear_mask_vec`
 - center coordinates: `x_m`, `y_m`
 - padding metadata: `padded`, `original_shape`, `padded_shape`
+
+
+### Seed mask vs target mask
+
+Map estimators now support two optional mask inputs with different roles:
+
+- `seed_mask_px`: controls **which patches are allowed to act as seeds** (which bins get a velocity estimate).
+- `shear_mask_px` (with `use_shear_mask=True`): controls **which patches are allowed as correlation targets/candidates** during fitting.
+
+Backward compatibility behavior:
+
+- If `seed_mask_px` is omitted (`None`), seed selection follows the same logic as before (uses the shear/target mask).
+- If `use_shear_mask=False`, target gating defaults to all patches; with `seed_mask_px=None`, seed selection also defaults to all patches.
+
+```python
+vm = estimate_velocity_map(
+    movie=movie,
+    fs=50_000,
+    grid=grid,
+    bg_boxes_px=bg_boxes_px,
+    extent_xd_yd=extent,
+    dj_mm=Dj,
+    shifts=(1, 2),
+    options=opts,
+    use_shear_mask=True,
+    shear_mask_px=target_mask_px,   # who can be matched against each seed
+    seed_mask_px=seed_only_mask_px, # which bins become seeds
+)
+```
 
 ## Minimal example
 
