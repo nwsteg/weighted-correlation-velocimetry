@@ -57,6 +57,18 @@ Returns `VelocityMapResult` with:
 
 This filter is applied per seed and per shift before velocity fitting.
 
+Interpretation details:
+
+- accepted bins for a lag are those that pass the lag gating (`rmin`, sign, finite,
+  directional constraints, `min_used`)
+- weights are the same correlation-power weights used in centroid displacement,
+  `w = |corr| ** weight_power`
+- `support_radius` is computed from the weighted spread (second moments) of accepted bins
+- `edge_distance` is the weighted-centroid distance to the nearest frame edge (in bin units)
+
+Therefore, `support_radius` (and the circle shown in the interactive correlation view)
+depends on both **which bins were accepted** and their **weights**.
+
 
 ### Seed mask vs target mask
 
