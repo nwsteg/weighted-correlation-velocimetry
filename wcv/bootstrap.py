@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable
+import sys
 import warnings
 
 import numpy as np
@@ -132,6 +133,8 @@ def bootstrap_velocity_map(
     ci_percentiles: tuple[float, float] = (2.5, 97.5),
     min_valid_fraction: float = 0.2,
     store_samples: bool = False,
+    show_progress: bool = False,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> VelocityBootstrapResult:
     """Estimate WCV uncertainty from one temporally-correlated movie.
 
@@ -160,19 +163,46 @@ def bootstrap_velocity_map(
         raise ValueError("block_length must be > 0")
 
     rng = np.random.default_rng(seed)
+    total_bootstrap = int(n_bootstrap)
+
+    tqdm_bar = None
+    use_text_fallback = False
+    if progress_callback is None and show_progress:
+        try:
+            from tqdm.auto import tqdm
+
+            tqdm_bar = tqdm(total=total_bootstrap, desc="Bootstrap", unit="rep")
+        except Exception:
+            use_text_fallback = True
 
     sample_ux: list[np.ndarray] = []
     sample_uy: list[np.ndarray] = []
     sample_um: list[np.ndarray] = []
-    for _ in range(int(n_bootstrap)):
-        idx = moving_block_bootstrap_indices(n_frames, blen, rng, circular=circular)
-        res = estimator(movie=movie_arr[idx], **est_kwargs)
-        ux = np.asarray(res.ux_map, dtype=np.float32)
-        uy = np.asarray(res.uy_map, dtype=np.float32)
-        um = np.sqrt(ux * ux + uy * uy).astype(np.float32)
-        sample_ux.append(ux)
-        sample_uy.append(uy)
-        sample_um.append(um)
+    try:
+        for done in range(1, total_bootstrap + 1):
+            idx = moving_block_bootstrap_indices(n_frames, blen, rng, circular=circular)
+            res = estimator(movie=movie_arr[idx], **est_kwargs)
+            ux = np.asarray(res.ux_map, dtype=np.float32)
+            uy = np.asarray(res.uy_map, dtype=np.float32)
+            um = np.sqrt(ux * ux + uy * uy).astype(np.float32)
+            sample_ux.append(ux)
+            sample_uy.append(uy)
+            sample_um.append(um)
+
+            if progress_callback is not None:
+                progress_callback(done, total_bootstrap)
+            elif tqdm_bar is not None:
+                try:
+                    tqdm_bar.update(1)
+                except Exception:
+                    use_text_fallback = True
+                    tqdm_bar.close()
+                    tqdm_bar = None
+            if use_text_fallback:
+                print(f"Bootstrap {done}/{total_bootstrap}", file=sys.stderr)
+    finally:
+        if tqdm_bar is not None:
+            tqdm_bar.close()
 
     ux_stack = np.stack(sample_ux, axis=0)
     uy_stack = np.stack(sample_uy, axis=0)
@@ -182,7 +212,7 @@ def bootstrap_velocity_map(
         ux=_summary_from_samples(ux_stack, ci_percentiles, min_valid_fraction),
         uy=_summary_from_samples(uy_stack, ci_percentiles, min_valid_fraction),
         um=_summary_from_samples(um_stack, ci_percentiles, min_valid_fraction),
-        n_bootstrap=int(n_bootstrap),
+        n_bootstrap=total_bootstrap,
         block_length=int(blen),
         ci_percentiles=(lo, hi),
         sample_shape=ux_stack.shape[1:],

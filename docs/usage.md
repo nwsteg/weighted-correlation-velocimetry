@@ -234,6 +234,8 @@ bt = bootstrap_velocity_map(
         options=opts,
         use_shear_mask=False,
     ),
+    show_progress=True,  # overall replicate progress
+    # progress_callback=lambda done, total: print(done, total),
     # block_length=16,      # optional override
     # circular=True,        # optional circular block bootstrap
     ci_percentiles=(2.5, 97.5),
@@ -248,6 +250,9 @@ ux_valid = bt.ux.valid_fraction
 ```
 
 The same summaries are available for `uy` and speed magnitude `um`.
+
+You can also provide `progress_callback(done, total)` to receive one update per bootstrap replicate.
+When `show_progress=True`, WCV first tries a `tqdm` bar; if notebook widget rendering fails (for example `Error displaying widget: model not found`) or `tqdm` is unavailable, it falls back to a plain text `Bootstrap i/N` counter.
 
 ## Building docs locally
 

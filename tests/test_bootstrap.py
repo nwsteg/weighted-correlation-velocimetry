@@ -67,6 +67,21 @@ def test_bootstrap_handles_low_n_and_min_valid_threshold() -> None:
     assert result.ux.valid_fraction[0, 1] == 0.0
 
 
+def test_bootstrap_progress_callback_receives_all_replicates() -> None:
+    movie = np.random.default_rng(11).standard_normal((50, 4, 4), dtype=np.float32)
+    updates: list[tuple[int, int]] = []
+
+    _ = bootstrap_velocity_map(
+        movie,
+        n_bootstrap=5,
+        estimator=_stub_estimator,
+        seed=42,
+        progress_callback=lambda done, total: updates.append((done, total)),
+    )
+
+    assert updates == [(1, 5), (2, 5), (3, 5), (4, 5), (5, 5)]
+
+
 def test_bootstrap_integration_with_velocity_estimator_shift1() -> None:
     rng = np.random.default_rng(12)
     movie = rng.standard_normal((100, 16, 16), dtype=np.float32)
