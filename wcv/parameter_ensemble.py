@@ -4,7 +4,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import logging
 from pathlib import Path
-from typing import Any
+import sys
+from typing import Any, Callable
 import warnings
 
 import numpy as np
@@ -167,20 +168,57 @@ def run_parameter_ensemble_uncertainty(
     n_param: int = 120,
     seed: int = 0,
     edge_clip_none_fraction: float = 0.1,
+    rmin_bounds: tuple[float, float] = (0.2, 0.5),
+    min_used_bounds: tuple[int, int] = (10, 60),
+    weight_power_bounds: tuple[float, float] = (1.0, 3.0),
+    edge_clip_bounds: tuple[float, float] = (0.5, 2.0),
     min_valid_fraction: float = 0.8,
     eps: float = 1e-6,
     n_jobs: int = 1,
     progress_every: int = 10,
+    show_progress: bool = False,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> ParameterEnsembleResult:
     if not (0.0 <= float(min_valid_fraction) <= 1.0):
         raise ValueError("min_valid_fraction must be in [0, 1]")
+
     sampled = sample_parameter_ensemble(
         int(n_param),
         seed=int(seed),
         edge_clip_none_fraction=float(edge_clip_none_fraction),
+        rmin_bounds=rmin_bounds,
+        min_used_bounds=min_used_bounds,
+        weight_power_bounds=weight_power_bounds,
+        edge_clip_bounds=edge_clip_bounds,
     )
 
     est_kwargs = dict(estimator_kwargs)
+    total_runs = int(n_param)
+
+    tqdm_bar = None
+    use_text_fallback = False
+    if progress_callback is None and show_progress:
+        try:
+            from tqdm.auto import tqdm
+
+            tqdm_bar = tqdm(total=total_runs, desc="Param ensemble", unit="run")
+        except Exception:
+            use_text_fallback = True
+
+    def _emit_progress(done: int) -> None:
+        nonlocal use_text_fallback, tqdm_bar
+        if progress_callback is not None:
+            progress_callback(done, total_runs)
+            return
+        if tqdm_bar is not None:
+            try:
+                tqdm_bar.update(1)
+            except Exception:
+                use_text_fallback = True
+                tqdm_bar.close()
+                tqdm_bar = None
+        if use_text_fallback:
+            print(f"Param ensemble {done}/{total_runs}", file=sys.stderr)
 
     def _single_run(i: int) -> tuple[np.ndarray, np.ndarray, int]:
         edge_k = None if bool(sampled["edge_clip_is_none"][i]) else float(sampled["edge_clip_reject_k"][i])
@@ -208,31 +246,42 @@ def run_parameter_ensemble_uncertainty(
 
     first_ux, first_uy, first_count = _single_run(0)
     shape = first_ux.shape
-    ux_runs = np.full((int(n_param),) + shape, np.nan, dtype=np.float32)
-    uy_runs = np.full((int(n_param),) + shape, np.nan, dtype=np.float32)
-    valid_seed_count = np.zeros(int(n_param), dtype=np.int32)
+    ux_runs = np.full((total_runs,) + shape, np.nan, dtype=np.float32)
+    uy_runs = np.full((total_runs,) + shape, np.nan, dtype=np.float32)
+    valid_seed_count = np.zeros(total_runs, dtype=np.int32)
     ux_runs[0] = first_ux
     uy_runs[0] = first_uy
     valid_seed_count[0] = first_count
 
-    remaining = list(range(1, int(n_param)))
-    if int(n_jobs) > 1 and remaining:
-        with ThreadPoolExecutor(max_workers=int(n_jobs)) as ex:
-            for done, (idx, out) in enumerate(zip(remaining, ex.map(_single_run, remaining)), start=2):
-                ux, uy, cnt = out
+    done = 1
+    _emit_progress(done)
+
+    remaining = list(range(1, total_runs))
+    try:
+        if int(n_jobs) > 1 and remaining:
+            with ThreadPoolExecutor(max_workers=int(n_jobs)) as ex:
+                for idx, out in zip(remaining, ex.map(_single_run, remaining)):
+                    ux, uy, cnt = out
+                    ux_runs[idx] = ux
+                    uy_runs[idx] = uy
+                    valid_seed_count[idx] = cnt
+                    done += 1
+                    _emit_progress(done)
+                    if progress_every > 0 and (done % int(progress_every) == 0 or done == total_runs):
+                        LOGGER.info("Parameter ensemble %d/%d", done, total_runs)
+        else:
+            for idx in remaining:
+                ux, uy, cnt = _single_run(idx)
                 ux_runs[idx] = ux
                 uy_runs[idx] = uy
                 valid_seed_count[idx] = cnt
-                if progress_every > 0 and (done % int(progress_every) == 0 or done == int(n_param)):
-                    LOGGER.info("Parameter ensemble %d/%d", done, int(n_param))
-    else:
-        for done, idx in enumerate(remaining, start=2):
-            ux, uy, cnt = _single_run(idx)
-            ux_runs[idx] = ux
-            uy_runs[idx] = uy
-            valid_seed_count[idx] = cnt
-            if progress_every > 0 and (done % int(progress_every) == 0 or done == int(n_param)):
-                LOGGER.info("Parameter ensemble %d/%d", done, int(n_param))
+                done += 1
+                _emit_progress(done)
+                if progress_every > 0 and (done % int(progress_every) == 0 or done == total_runs):
+                    LOGGER.info("Parameter ensemble %d/%d", done, total_runs)
+    finally:
+        if tqdm_bar is not None:
+            tqdm_bar.close()
 
     finite_joint = np.isfinite(ux_runs) & np.isfinite(uy_runs)
     coverage = finite_joint.mean(axis=0).astype(np.float32)
@@ -288,7 +337,7 @@ def run_parameter_ensemble_uncertainty(
         sampled_weight_power=sampled["weight_power"],
         sampled_edge_clip_reject_k=sampled["edge_clip_reject_k"],
         sampled_edge_clip_is_none=sampled["edge_clip_is_none"],
-        n_param=int(n_param),
+        n_param=total_runs,
         seed=int(seed),
         min_valid_fraction=float(min_valid_fraction),
         sigma_param_ux=sigma_param_ux,

@@ -38,6 +38,23 @@ def test_parameter_sampling_is_reproducible() -> None:
     np.testing.assert_array_equal(s1["edge_clip_is_none"], s2["edge_clip_is_none"])
 
 
+def test_parameter_sampling_custom_bounds_are_applied() -> None:
+    s = sample_parameter_ensemble(
+        48,
+        seed=4,
+        edge_clip_none_fraction=0.0,
+        rmin_bounds=(0.25, 0.3),
+        min_used_bounds=(12, 13),
+        weight_power_bounds=(1.5, 1.7),
+        edge_clip_bounds=(0.8, 0.9),
+    )
+
+    assert np.all((s["rmin"] >= 0.25) & (s["rmin"] <= 0.3))
+    assert np.all((s["min_used"] >= 12) & (s["min_used"] <= 13))
+    assert np.all((s["weight_power"] >= 1.5) & (s["weight_power"] <= 1.7))
+    assert np.all((s["edge_clip_reject_k"] >= 0.8) & (s["edge_clip_reject_k"] <= 0.9))
+
+
 def test_ensemble_shapes_nan_handling_and_stats_ordering() -> None:
     movie = np.zeros((5, 8, 8), dtype=np.float32)
     out = run_parameter_ensemble_uncertainty(
@@ -59,3 +76,42 @@ def test_ensemble_shapes_nan_handling_and_stats_ordering() -> None:
     assert np.all(out.ux.p2_5[finite] <= out.ux.p97_5[finite])
     finite_std = np.isfinite(out.ux.std)
     assert np.all(out.ux.std[finite_std] >= 0.0)
+
+
+def test_ensemble_progress_callback_receives_all_updates() -> None:
+    movie = np.zeros((5, 8, 8), dtype=np.float32)
+    updates: list[tuple[int, int]] = []
+
+    _ = run_parameter_ensemble_uncertainty(
+        movie,
+        estimator_kwargs={},
+        baseline_options=EstimationOptions(),
+        estimator=_stub_estimator,
+        n_param=7,
+        seed=3,
+        progress_callback=lambda done, total: updates.append((done, total)),
+    )
+
+    assert updates == [(1, 7), (2, 7), (3, 7), (4, 7), (5, 7), (6, 7), (7, 7)]
+
+
+def test_ensemble_run_accepts_custom_bounds() -> None:
+    movie = np.zeros((5, 8, 8), dtype=np.float32)
+    out = run_parameter_ensemble_uncertainty(
+        movie,
+        estimator_kwargs={},
+        baseline_options=EstimationOptions(),
+        estimator=_stub_estimator,
+        n_param=16,
+        seed=8,
+        rmin_bounds=(0.31, 0.32),
+        min_used_bounds=(14, 18),
+        weight_power_bounds=(2.4, 2.5),
+        edge_clip_bounds=(1.4, 1.5),
+        edge_clip_none_fraction=0.0,
+    )
+
+    assert np.all((out.sampled_rmin >= 0.31) & (out.sampled_rmin <= 0.32))
+    assert np.all((out.sampled_min_used >= 14) & (out.sampled_min_used <= 18))
+    assert np.all((out.sampled_weight_power >= 2.4) & (out.sampled_weight_power <= 2.5))
+    assert np.all((out.sampled_edge_clip_reject_k >= 1.4) & (out.sampled_edge_clip_reject_k <= 1.5))
