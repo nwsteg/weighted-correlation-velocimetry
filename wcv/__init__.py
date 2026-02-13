@@ -16,6 +16,13 @@ from .estimator_map import (
     estimate_velocity_map_hybrid,
     estimate_velocity_map_streaming,
 )
+from .bootstrap import (
+    BootstrapSummary,
+    VelocityBootstrapResult,
+    bootstrap_velocity_map,
+    default_block_length,
+    moving_block_bootstrap_indices,
+)
 from .estimator_single_seed import estimate_single_seed_velocity
 from .interactive import load_hardcoded_plif, make_plif_interactive_widget
 from .legacy import draw_boxes_debug, estimate_velocity_per_shift_framework
@@ -45,6 +52,11 @@ __all__ = [
     "estimate_velocity_map",
     "estimate_velocity_map_streaming",
     "estimate_velocity_map_hybrid",
+    "bootstrap_velocity_map",
+    "moving_block_bootstrap_indices",
+    "default_block_length",
+    "BootstrapSummary",
+    "VelocityBootstrapResult",
     "GridSpec",
     "EstimationOptions",
     "SingleSeedResult",
