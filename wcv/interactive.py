@@ -9,8 +9,6 @@ Two entrypoints are provided:
 
 import argparse
 from pathlib import Path
-import sys
-from dataclasses import dataclass
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -22,15 +20,6 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  # needed for 3D projectio
 from .estimator_single_seed import estimate_single_seed_velocity
 from .geometry import frac_to_px_box
 from .types import EstimationOptions, GridSpec
-
-
-@dataclass(frozen=True)
-class _DatasetConfig:
-    module_path: str = "G:/labcode"
-    aux_dir: str = r"G:/2025 JICF4 Simul PLIF Schlieren/FST1060/plif/plif_aux"
-    name: str = "plif"
-    dj_mm: float = 3.5
-    fs_hz: float = 50_000.0
 
 
 def load_extent(extent_file: str | Path) -> tuple[float, float, float, float] | None:
@@ -151,22 +140,15 @@ def _prompt_gui_inputs() -> tuple[str, str, str, float]:
 
 
 def load_hardcoded_plif() -> tuple[np.ndarray, tuple[float, float, float, float], float, float]:
-    """Load and normalize the hardcoded PLIF dataset from the user snippet."""
-    cfg = _DatasetConfig()
-
-    if cfg.module_path not in sys.path:
-        sys.path.append(cfg.module_path)
-
-    from image_dataset import ImageDataset  # pylint: disable=import-error
-
-    plif = ImageDataset(name=cfg.name, aux_dir=cfg.aux_dir)
-
-    bgs = plif.images[100:-10]
-    bgs = bgs / np.max(bgs)
-    bgs_f = bgs.astype(np.float32, copy=False)
-
-    extent = tuple((np.asarray(plif.extent) / cfg.dj_mm).astype(float))
-    return bgs_f, extent, cfg.dj_mm, cfg.fs_hz
+    """Backward-compatible loader that now prompts for user-selected inputs."""
+    source, frame_range, extent_file, fs_hz = _prompt_gui_inputs()
+    return load_user_plif(
+        source=source,
+        frame_range=frame_range,
+        extent_file=extent_file,
+        fs_hz=fs_hz,
+        dj_mm=1.0,
+    )
 
 
 def _default_bg_boxes(nx: int, ny: int, bin_px: int) -> list[tuple[int, int, int, int]]:

@@ -32,7 +32,6 @@ from .parameter_ensemble import (
     save_parameter_ensemble_bundle,
 )
 from .estimator_single_seed import estimate_single_seed_velocity
-from .interactive import load_hardcoded_plif, make_plif_interactive_widget
 from .legacy import draw_boxes_debug, estimate_velocity_per_shift_framework
 from .types import EstimationOptions, GridSpec, SingleSeedResult, VelocityMapResult
 
