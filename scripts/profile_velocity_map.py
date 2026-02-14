@@ -32,7 +32,6 @@ from __future__ import annotations
 import argparse
 import cProfile
 import csv
-import inspect
 import io
 import pstats
 import time
@@ -116,11 +115,10 @@ def load_movie(movie_npy: str | None, shape: tuple[int, int, int], seed: int) ->
     return rng.standard_normal(shape, dtype=np.float32)
 
 
-def call_estimator(fn: Any, **kwargs: Any) -> tuple[Any, set[str]]:
-    sig = inspect.signature(fn)
-    use_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
-    ignored = set(kwargs).difference(use_kwargs)
-    return fn(**use_kwargs), ignored
+def call_estimator(estimator: EstimatorSpec, fn: Any, **kwargs: Any) -> Any:
+    if estimator.label == "materialized":
+        kwargs.pop("seed_chunk_size", None)
+    return fn(**kwargs)
 
 
 def make_bg_boxes(
@@ -173,7 +171,7 @@ def profile_once(
     show_progress: bool,
     do_cprofile: bool,
     profile_top: int,
-) -> tuple[RunSummary, set[str]]:
+) -> RunSummary:
     stride = bin_px // base_patch_px
     grid = GridSpec(patch_px=base_patch_px, grid_stride_patches=stride)
     _, ny, nx = movie.shape
@@ -219,7 +217,7 @@ def profile_once(
     t0 = time.perf_counter()
     if profiler is not None:
         profiler.enable()
-    vm, ignored_kwargs = call_estimator(fn, **kwargs)
+    vm = call_estimator(estimator, fn, **kwargs)
     if profiler is not None:
         profiler.disable()
     runtime_s = time.perf_counter() - t0
@@ -230,8 +228,7 @@ def profile_once(
         _print_cprofile_stats(profiler, estimator.label, bin_px, profile_top)
 
     n_regions = int(vm.by * vm.bx)
-    return (
-        RunSummary(
+    return RunSummary(
             estimator=estimator.label,
             bin_px=bin_px,
             runtime_s=runtime_s,
@@ -243,9 +240,7 @@ def profile_once(
             ny=int(movie.shape[1]),
             nx=int(movie.shape[2]),
             shift_count=len(shifts),
-        ),
-        ignored_kwargs,
-    )
+        )
 
 
 def summarize_runs(runs: list[RunSummary]) -> ProfileSummary:
@@ -427,7 +422,6 @@ def main() -> None:
         f"modes={[e.label for e in estimators]}"
     )
 
-    warned_ignored: set[str] = set()
     for bin_px in bin_sizes:
         if bin_px % args.base_patch_px != 0:
             print(f"[skip] bin {bin_px}: not divisible by base_patch_px={args.base_patch_px}")
@@ -436,7 +430,7 @@ def main() -> None:
         for estimator in estimators:
             runs: list[RunSummary] = []
             for _ in range(args.repeat):
-                run, ignored_kwargs = profile_once(
+                run = profile_once(
                     estimator=estimator,
                     movie=movie,
                     fs=float(args.fs),
@@ -453,13 +447,6 @@ def main() -> None:
                 )
                 runs.append(run)
 
-                ignored_nonnull = {k for k in ignored_kwargs if k in {"chunk_size", "seed_chunk_size"}}
-                if ignored_nonnull and estimator.label not in warned_ignored:
-                    print(
-                        f"[note] {estimator.label}: estimator API ignored {sorted(ignored_nonnull)}; "
-                        "chunked hybrid controls are unavailable in this install."
-                    )
-                    warned_ignored.add(estimator.label)
 
             summary = summarize_runs(runs)
             rows.append(summary)

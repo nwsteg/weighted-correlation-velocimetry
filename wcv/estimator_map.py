@@ -594,55 +594,9 @@ def estimate_velocity_map_streaming(
     )
 
 
-def estimate_velocity_map_hybrid(
-    movie: np.ndarray,
-    fs: float,
-    grid: GridSpec,
-    bg_boxes_px: list[tuple[int, int, int, int]],
-    extent_xd_yd: tuple[float, float, float, float],
-    dj_mm: float,
-    shifts: tuple[int, ...] = (1,),
-    options: EstimationOptions = EstimationOptions(),
-    allow_bin_padding: bool = False,
-    use_shear_mask: bool = True,
-    shear_mask_px: np.ndarray | None = None,
-    seed_mask_px: np.ndarray | None = None,
-    shear_pctl: float = 50,
-    origin: str = "upper",
-    detrend_type: str = "linear",
-    store_corr_by_shift: bool = False,
-    seed_chunk_size: int = 64,
-    shift_chunk_size: int | None = None,
-    max_corr_buffer_mb: float | None = 512.0,
-    show_progress: bool = False,
-    progress_factory: Callable[[int, str], object] | None = None,
-    on_progress: ProgressCallback | None = None,
-) -> VelocityMapResult:
-    """Hybrid map estimator using bounded blockwise seed/shift correlation batches."""
-    return estimate_velocity_map_streaming(
-        movie=movie,
-        fs=fs,
-        grid=grid,
-        bg_boxes_px=bg_boxes_px,
-        extent_xd_yd=extent_xd_yd,
-        dj_mm=dj_mm,
-        shifts=shifts,
-        options=options,
-        allow_bin_padding=allow_bin_padding,
-        use_shear_mask=use_shear_mask,
-        shear_mask_px=shear_mask_px,
-        seed_mask_px=seed_mask_px,
-        shear_pctl=shear_pctl,
-        origin=origin,
-        detrend_type=detrend_type,
-        store_corr_by_shift=store_corr_by_shift,
-        seed_chunk_size=seed_chunk_size,
-        shift_chunk_size=shift_chunk_size,
-        max_corr_buffer_mb=max_corr_buffer_mb,
-        show_progress=show_progress,
-        progress_factory=progress_factory,
-        on_progress=on_progress,
-    )
+def estimate_velocity_map_hybrid(*args, **kwargs) -> VelocityMapResult:
+    """Backward-compatible alias of :func:`estimate_velocity_map_streaming`."""
+    return estimate_velocity_map_streaming(*args, **kwargs)
 
 def estimate_velocity_map(
     movie: np.ndarray,
