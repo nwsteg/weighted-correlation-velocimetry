@@ -8,6 +8,7 @@ Two entrypoints are provided:
 """
 
 import argparse
+from pathlib import Path
 import sys
 from dataclasses import dataclass
 
@@ -30,6 +31,123 @@ class _DatasetConfig:
     name: str = "plif"
     dj_mm: float = 3.5
     fs_hz: float = 50_000.0
+
+
+def load_extent(extent_file: str | Path) -> tuple[float, float, float, float] | None:
+    """Load extent from an extent.txt style file containing `xs xe ys ye`."""
+    extent_path = Path(extent_file)
+    if not extent_path.exists():
+        return None
+
+    try:
+        line = extent_path.read_text(encoding="utf-8").strip()
+        xs, xe, ys, ye = map(float, line.split()[:4])
+        return xs, xe, ys, ye
+    except Exception:
+        return None
+
+
+def _parse_frame_slice(spec: str | None) -> slice:
+    if spec is None or spec.strip() == "":
+        return slice(None)
+
+    parts = spec.split(":")
+    if len(parts) not in (2, 3):
+        raise ValueError("Frame range must look like start:end or start:end:step.")
+    vals = [int(p) if p.strip() else None for p in parts]
+    if len(vals) == 2:
+        vals.append(None)
+    return slice(*vals)
+
+
+def _collect_tif_paths(path: Path) -> list[Path]:
+    if path.is_file():
+        return [path]
+    if path.is_dir():
+        return sorted(list(path.glob("*.tif")) + list(path.glob("*.tiff")))
+    return []
+
+
+def _read_tif_stack(path: Path) -> np.ndarray:
+    try:
+        import tifffile
+
+        arr = np.asarray(tifffile.imread(path), dtype=np.float32)
+    except ImportError:
+        arr = np.asarray(plt.imread(path), dtype=np.float32)
+
+    if arr.ndim == 2:
+        arr = arr[np.newaxis, ...]
+    elif arr.ndim > 3:
+        raise ValueError(f"Unsupported TIFF dimensionality for {path}: {arr.shape}")
+    return arr
+
+
+def load_user_plif(
+    source: str | Path,
+    frame_range: str | None,
+    extent_file: str | Path,
+    fs_hz: float,
+    dj_mm: float = 1.0,
+) -> tuple[np.ndarray, tuple[float, float, float, float], float, float]:
+    """Load TIFF sequence from a file or folder, apply frame slicing, and normalize."""
+    source_path = Path(source)
+    tif_paths = _collect_tif_paths(source_path)
+    if not tif_paths:
+        raise ValueError("No .tif/.tiff files found at the selected source.")
+
+    stacks = [_read_tif_stack(p) for p in tif_paths]
+    movie = np.concatenate(stacks, axis=0)
+    movie = movie[_parse_frame_slice(frame_range)]
+    if movie.size == 0:
+        raise ValueError("Selected frame range produced an empty sequence.")
+
+    max_val = float(np.max(np.abs(movie)))
+    if max_val <= 0:
+        raise ValueError("Input frames are all zero.")
+    movie = (movie / max_val).astype(np.float32, copy=False)
+
+    extent = load_extent(extent_file)
+    if extent is None:
+        raise ValueError("Could not load extent. Ensure extent.txt contains: xs xe ys ye")
+
+    return movie, extent, float(dj_mm), float(fs_hz)
+
+
+def _prompt_gui_inputs() -> tuple[str, str, str, float]:
+    import tkinter as tk
+    from tkinter import filedialog, simpledialog
+
+    root = tk.Tk()
+    root.withdraw()
+
+    source_file = filedialog.askopenfilename(
+        title="Select a TIFF file (Cancel to pick a folder)",
+        filetypes=(("TIFF", "*.tif *.tiff"), ("All files", "*.*")),
+    )
+    source = source_file or filedialog.askdirectory(title="Select folder containing TIFF files")
+    if not source:
+        raise ValueError("No TIFF source selected.")
+
+    frame_range = simpledialog.askstring(
+        "Frame range",
+        "Enter frame range as start:end or start:end:step (leave blank for all):",
+        initialvalue="100:200",
+        parent=root,
+    )
+    fs_hz = simpledialog.askfloat("Sample rate", "Enter sample rate [Hz]:", initialvalue=50000.0, parent=root)
+    if fs_hz is None or fs_hz <= 0:
+        raise ValueError("Sample rate must be positive.")
+
+    extent_file = filedialog.askopenfilename(
+        title="Select extent.txt",
+        filetypes=(("Text", "*.txt"), ("All files", "*.*")),
+    )
+    if not extent_file:
+        raise ValueError("No extent file selected.")
+
+    root.destroy()
+    return source, frame_range or "", extent_file, float(fs_hz)
 
 
 def load_hardcoded_plif() -> tuple[np.ndarray, tuple[float, float, float, float], float, float]:
@@ -339,9 +457,23 @@ def make_plif_interactive_widget() -> None:
     display(fig)
 
 
-def launch_plif_interactive_gui() -> None:
+def launch_plif_interactive_gui(
+    *,
+    source: str | None = None,
+    frame_range: str | None = None,
+    extent_file: str | None = None,
+    fs_hz: float | None = None,
+) -> None:
     """Launch a command-line desktop GUI with 2D/3D correlation-map toggle."""
-    movie, extent_xd_yd, dj_mm, fs = load_hardcoded_plif()
+    if source is None or extent_file is None or fs_hz is None:
+        source, frame_range, extent_file, fs_hz = _prompt_gui_inputs()
+
+    movie, extent_xd_yd, dj_mm, fs = load_user_plif(
+        source=source,
+        frame_range=frame_range,
+        extent_file=extent_file,
+        fs_hz=float(fs_hz),
+    )
     _, ny, nx = movie.shape
     mean_img = movie.mean(axis=0)
 
@@ -521,10 +653,19 @@ def main(argv: list[str] | None = None) -> int:
         default="gui",
         help="Launch desktop GUI or notebook widget mode (default: gui)",
     )
+    parser.add_argument("--source", type=str, default=None, help="TIFF file or folder of TIFF files")
+    parser.add_argument("--frames", type=str, default=None, help="Frame slice, e.g. 100:200")
+    parser.add_argument("--extent", type=str, default=None, help="Path to extent.txt with: xs xe ys ye")
+    parser.add_argument("--fs", type=float, default=None, help="Sample rate in Hz")
     args = parser.parse_args(argv)
 
     if args.mode == "gui":
-        launch_plif_interactive_gui()
+        launch_plif_interactive_gui(
+            source=args.source,
+            frame_range=args.frames,
+            extent_file=args.extent,
+            fs_hz=args.fs,
+        )
     else:
         make_plif_interactive_widget()
     return 0
